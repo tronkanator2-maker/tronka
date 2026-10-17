@@ -547,17 +547,16 @@ if(u.state==="wizard"){if(m.photo?.length)return send(id,"Для фото буд
 if(u.state==="profile"){
  const input=m.caption||t;
  const parsed=parse(input);
- if(!Object.keys(parsed).length)return send(id,"Не вижу заполненных полей анкеты. Скопируйте шаблон и пришлите отдельным сообщением либо в подписи к фото. Поля должны начинаться с «Имя:», «Город:» и т. д.");
- const p={...(u.profile||{}),...parsed},errors=validProfile(p);
- if(errors.length)return send(id,"Нужно уточнить:\n• "+esc(errors.join("\n• "))+"\n\nИсправьте поля и отправьте сообщение снова.");
- if(m.photo?.length){
-  const file=m.photo[m.photo.length-1].file_id;
-  const photos=[...new Set([...(Array.isArray(u.photos)?u.photos:[]),file])].slice(0,5);
-  await change(id,{photos,photo:photos[0]});
- }
- await change(id,{profile:p,state:"profile_confirm"});
- const summary=Object.entries(p).map(([key,value])=>esc(key)+": "+esc(value)).join("\n");
- return send(id,"<b>✅ Проверьте анкету</b>\n\n"+summary+"\n\nПроверили? Сохраните. Если нужно изменить один пункт, нажмите «Исправить».",buttons([[["✅ Сохранить","profile_save"],["✏️ Исправить","edit_profile"]]]));
+ const photoFile=m.photo?.length?m.photo[m.photo.length-1].file_id:null;
+ if(!Object.keys(parsed).length&&!photoFile)return send(id,"Не вижу заполненных полей. Пришлите строки «Имя: ...», «Город: ...» и т. д. либо добавьте фото с подписью.");
+ const draft={...profileDraftOf(u),...parsed};
+ const filters=stageProfileDraft(u.filters,draft,photoFile?{profileDraftPhoto:photoFile}:{});
+ await change(id,{filters});
+ const errors=validProfile(draft);
+ if(errors.length)return send(id,"Черновик сохранён, но для завершения ещё нужно:\n• "+esc(errors.join("\n• "))+"\n\nДобавьте недостающие строки — уже заполненные поля не потеряются.");
+ await change(id,{state:"profile_confirm"});
+ const summary=Object.entries(draft).map(([key,value])=>esc(key)+": "+esc(value)).join("\n");
+ return send(id,"<b>✅ Проверьте черновик</b>\n\n"+summary+"\n\nДо нажатия «Сохранить» ваш публичный профиль не меняется.",buttons([[["✅ Сохранить","profile_save"],["✏️ Исправить","edit_profile"],["❌ Отменить","wizard:cancel"]]]));
 }
 if(u.state==="job_edit"){
  const originalId=Number(u.filters?.draftJobId);
@@ -667,17 +666,36 @@ if(a==="docs")return send(id,"Все опубликованные докумен
   const next={...u,filters};
   return wizardCompleted(role,filters.wizardStep)?finishWizard(next):promptWizard(next);
  }
- if(a==="edit_profile"){if(Object.keys(u.profile||{}).length){await change(id,{state:"profile"});return send(id,"Чтобы изменить один пункт, пришлите его название и новое значение. Например:\n<code>Город: Москва, Казань</code>");}return send(id,"Выберите шаблон анкеты:",buttons([[["🎬 Модель / актёр","template_model"],["📸 Специалист / бренд","template_client"]]]))}
-if(a==="template_model"||a==="template_client"){const role=a==="template_model"?"модель":"фотограф";await change(id,{state:"profile",profile:{...(u.profile||{}),"кто вы":role}});const tpl=a==="template_model"?profileTpl:clientTpl;return send(id,"Скопируйте шаблон, заполните и отправьте отдельным сообщением:\n<code>"+esc(tpl)+"</code>")}if(a==="profile_save"){
- if(u.state!=="profile_confirm")return send(id,"Сначала отправьте анкету и подтвердите актуальную версию.");
- await change(id,{state:""});
- if(u.photo){
-  const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];
-  await profileBackfill(fresh);await backfill(fresh);
-  return send(id,"✅ Анкета обновлена! Фото уже загружено, профиль участвует в подборе.",buttons([[["👤 Моя анкета","profile"],["🏠 В меню","home"]]]));
+ if(a==="edit_profile"){
+ const draft=profileDraftOf(u);
+ if(Object.keys(draft).length){
+  const filters=stageProfileDraft(u.filters,draft);
+  await change(id,{state:"profile",filters});
+  return send(id,"📝 <b>Редактирование анкеты</b>\nПришлите только изменившиеся поля. Например:\n<code>Город: Москва, Казань</code>\n\nИзменения появятся в каталоге после подтверждения.",buttons([[["❌ Отменить","wizard:cancel"]]]));
  }
- return send(id,"✅ Анкета сохранена! Остался последний шаг: добавьте главное фото, чтобы попасть в подбор.",buttons([[["📷 Загрузить фото","addphoto"],["🏠 Позже","home"]]]));
-}if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправьте 1–5 фотографий: по одной или альбомом. Первая станет ключевой.",buttons([[["✅ Готово","photo_done"]]]))}if(a==="photo_done"){
+ return send(id,"Выберите шаблон анкеты или заполните по шагам:",buttons([[["🪄 По шагам","profile_wizard"]],[["🎬 Модель / актёр","template_model"],["📸 Специалист / бренд","template_client"]]]));
+}
+if(a==="template_model"||a==="template_client"){
+ const role=a==="template_model"?"модель":"фотограф";
+ const filters=stageProfileDraft(u.filters,{...profileDraftOf(u),"кто вы":role});
+ await change(id,{state:"profile",filters});
+ const tpl=a==="template_model"?profileTpl:clientTpl;
+ return send(id,"📝 Скопируйте шаблон, заполните и отправьте отдельным сообщением (можно с фото):\n<code>"+esc(tpl)+"</code>\n\nВ тестовом режиме используйте вымышленные данные.");
+}if(a==="profile_save"){
+ if(u.state!=="profile_confirm"||!u.filters?.profileDraft)return send(id,"Черновик не найден. Откройте «Моя анкета» и проверьте изменения.");
+ const draft=profileDraftOf(u),errors=validProfile(draft);
+ if(errors.length)return send(id,"Нужно исправить поля:\n• "+esc(errors.join("\n• ")));
+ const pendingPhoto=u.filters.profileDraftPhoto;
+ const photos=mergeProfilePhoto(u.photos,pendingPhoto);
+ const savedFilters=discardProfileDraft(u.filters);
+ await change(id,{profile:draft,filters:savedFilters,state:"",photos,photo:photos[0]||u.photo||null});
+ const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];
+ if(fresh.photo){await profileBackfill(fresh);await backfill(fresh);
+  return send(id,"✅ Анкета сохранена! Фото есть, профиль готов к подбору.",buttons([[["👤 Моя анкета","profile"],["🏠 В меню","home"]]]));
+ }
+ return send(id,"✅ Анкета сохранена. Чтобы участвовать в подборе, добавьте главное фото.",buttons([[["📷 Добавить фото","addphoto"],["🏠 Позже","home"]]]));
+}
+if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправьте 1–5 фотографий: по одной или альбомом. Первая станет ключевой.",buttons([[["✅ Готово","photo_done"]]]))}if(a==="photo_done"){
  await change(id,{state:""});
  const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];
  if(fresh.photo){await backfill(fresh);await profileBackfill(fresh)}
