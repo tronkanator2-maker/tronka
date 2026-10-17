@@ -26,6 +26,9 @@ await sql("CREATE INDEX IF NOT EXISTS mm_update_age ON mm_updates(created_at)");
 await sql("CREATE TABLE IF NOT EXISTS mm_sources(id BIGINT PRIMARY KEY,title TEXT DEFAULT '',city TEXT DEFAULT '',topic TEXT DEFAULT '',active BOOLEAN DEFAULT TRUE,created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("CREATE TABLE IF NOT EXISTS mm_source_posts(source_id BIGINT NOT NULL,telegram_message_id BIGINT NOT NULL,job_id BIGINT,moderation TEXT NOT NULL,reason TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(source_id,telegram_message_id))");
 await sql("CREATE TABLE IF NOT EXISTS mm_source_blacklist(source_id BIGINT NOT NULL,contact TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(source_id,contact))");
+await sql("CREATE TABLE IF NOT EXISTS mm_collector_inbox(source_id BIGINT NOT NULL,telegram_message_id BIGINT NOT NULL,body TEXT NOT NULL,received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),processed_at TIMESTAMPTZ,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(source_id,telegram_message_id))");
+await sql("CREATE INDEX IF NOT EXISTS mm_collector_ready ON mm_collector_inbox(next_attempt_at) WHERE processed_at IS NULL");
+await sql("ALTER TABLE mm_sources ADD COLUMN IF NOT EXISTS username TEXT");
 await sql("CREATE TABLE IF NOT EXISTS mm_deliveries(user_id BIGINT NOT NULL,job_id BIGINT NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(user_id,job_id))");
 await sql("CREATE TABLE IF NOT EXISTS mm_fanout_queue(job_id BIGINT PRIMARY KEY, cursor_id BIGINT NOT NULL DEFAULT 0,profiles_done BOOLEAN NOT NULL DEFAULT FALSE,pending BOOLEAN NOT NULL DEFAULT TRUE,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),completed_at TIMESTAMPTZ)");
 await sql("CREATE INDEX IF NOT EXISTS mm_fanout_ready ON mm_fanout_queue(next_attempt_at) WHERE pending=TRUE");
@@ -421,6 +424,25 @@ function sourcePublicText(raw) {
  .replace(/(?:^|[\s(])@[A-Za-z0-9_]{5,32}\b/g," [контакт скрыт]")
  .replace(/(?:\+7|8)[\d\s()\-]{9,16}\d/g,"[контакт скрыт]");
 }
+let collectorInboxRunning=false;
+async function consumeCollectorInbox(){
+ if(collectorInboxRunning)return;
+ collectorInboxRunning=true;
+ try{
+  await ensure();
+  const messages=await sql("SELECT * FROM mm_collector_inbox WHERE processed_at IS NULL AND next_attempt_at<=NOW() ORDER BY received_at LIMIT 10");
+  for(const msg of messages){
+   try{
+    await onSourcePost({chat:{id:msg.source_id,type:"channel"},message_id:msg.telegram_message_id,text:msg.body});
+    await sql("UPDATE mm_collector_inbox SET processed_at=NOW() WHERE source_id=$1 AND telegram_message_id=$2",msg.source_id,msg.telegram_message_id);
+   }catch(e){
+    console.error("collector inbox error",String(e));
+    await sql("UPDATE mm_collector_inbox SET attempts=attempts+1,next_attempt_at=NOW()+INTERVAL '60 seconds' WHERE source_id=$1 AND telegram_message_id=$2",msg.source_id,msg.telegram_message_id);
+   }
+  }
+ }finally{collectorInboxRunning=false}
+}
+
 async function onSourcePost(m) {
  const sourceId=m?.chat?.id;
  if(!sourceId)return;
@@ -558,6 +580,7 @@ Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){
  return new Response("ok")}catch(e){console.error("Update error",e);return new Response("error",{status:500})}}return new Response("World Models Bot")}})
 setInterval(()=>ensure().then(()=>feedbackTick(sql,send)).catch(e=>console.error("feedback job",String(e))),60*60*1000);
 setInterval(()=>runFanoutBatch().catch(e=>console.error("fanout tick",String(e))),5000);
+setInterval(()=>consumeCollectorInbox().catch(e=>console.error("collector inbox",String(e))),5000);
 setInterval(()=>ensure().then(()=>reviewSourceHealth(sql)).catch(e=>console.error("source health",String(e))),24*60*60*1000);
 setInterval(()=>ensure().then(async()=>{
  await sql("DELETE FROM mm_updates WHERE created_at<NOW()-INTERVAL '30 days'");
