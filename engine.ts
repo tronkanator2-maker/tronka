@@ -185,3 +185,11 @@ export function isExplicitAdultCasting(text){
  const src=String(text||"").toLowerCase();
  return /(?:ню(?:\s|$)|\bnude\b|\bart\s*nude\b|топлес|имплайд|эротическ|будуар|сексуальн|постельн\w*\s+сцен|насили\w*\s+сексуальн|playboy|бдсм|фетиш|боди[\s-]*арт|\blingerie\b|бельев\w*\s+бренд\w*\s+для\s+взросл|съ[её]мк\w*\s+интимн\w*\s+зон)/i.test(src);
 }
+
+
+export function matchesWantedProfileRoles(selected,profileRoleText){
+ const required=Array.isArray(selected)?selected:(selected?[String(selected)]:[]);
+ if(!required.length)return true;
+ const owned=String(profileRoleText||"").toLowerCase().split(",").map(v=>v.trim()).filter(Boolean);
+ return required.some(r=>owned.includes(String(r).toLowerCase()));
+}
