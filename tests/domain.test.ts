@@ -40,3 +40,17 @@ test("photographer must include portfolio to be searchable",()=>{
  expect(eligibleProfile(profile,true)).toBe(false);
  expect(eligibleProfile({...profile,"портфолио":"https://drive.google.com"},true)).toBe(true);
 });
+
+import {matchesCastingRequirements} from "../engine.ts";
+test("casting requirements filter incompatible gender and age",()=>{
+ const job={"кого ищу":"модель","требования":"женщина 20-30 лет"};
+ const female={"кто вы":"модель","пол":"женский","дата рождения":"12.09.2002"};
+ const male={"кто вы":"модель","пол":"мужской","дата рождения":"12.09.2002"};
+ const older={"кто вы":"модель","пол":"женский","дата рождения":"12.09.1980"};
+ expect(matchesCastingRequirements(female,job)).toBe(true);
+ expect(matchesCastingRequirements(male,job)).toBe(false);
+ expect(matchesCastingRequirements(older,job)).toBe(false);
+});
+test("missing casting requirements do not reject profile",()=>{
+ expect(matchesCastingRequirements({"пол":"женский"},{"кого ищу":"модель","требования":""})).toBe(true);
+});
