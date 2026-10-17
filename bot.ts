@@ -19,6 +19,7 @@ await sql("CREATE TABLE IF NOT EXISTS mm_reports(id BIGSERIAL PRIMARY KEY,user_i
 await sql("CREATE TABLE IF NOT EXISTS mm_updates(id BIGINT PRIMARY KEY)");
 await sql("CREATE TABLE IF NOT EXISTS mm_sources(id BIGINT PRIMARY KEY,title TEXT DEFAULT '',city TEXT DEFAULT '',topic TEXT DEFAULT '',active BOOLEAN DEFAULT TRUE,created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("CREATE TABLE IF NOT EXISTS mm_source_posts(source_id BIGINT NOT NULL,telegram_message_id BIGINT NOT NULL,job_id BIGINT,moderation TEXT NOT NULL,reason TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(source_id,telegram_message_id))");
+await sql("CREATE TABLE IF NOT EXISTS mm_source_blacklist(source_id BIGINT NOT NULL,contact TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(source_id,contact))");
 await sql("CREATE TABLE IF NOT EXISTS mm_deliveries(user_id BIGINT NOT NULL,job_id BIGINT NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(user_id,job_id))");
 await sql("CREATE TABLE IF NOT EXISTS mm_reports_v2(id BIGSERIAL PRIMARY KEY,reporter BIGINT NOT NULL,target_user BIGINT,target_job BIGINT,kind TEXT NOT NULL DEFAULT 'support',body TEXT NOT NULL DEFAULT '',photo TEXT,created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("CREATE TABLE IF NOT EXISTS mm_profile_deliveries(job_id BIGINT NOT NULL,user_id BIGINT NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(job_id,user_id))");
@@ -253,6 +254,10 @@ async function onSourcePost(m) {
  if(parsed && /(?:несовершеннолет|до\s+1[0-7]\s+лет|дети\s+1[0-7]\s+лет)/i.test(raw))state="pending";
  let job=null;
  const contact=extractContact(raw);
+ if(contact){
+  const ignored=await sql("SELECT 1 FROM mm_source_blacklist WHERE source_id=$1 AND contact=$2",sourceId,contact);
+  if(ignored.length)state="rejected";
+ }
  if(parsed&&state!=="rejected"){
    // Deduplicate ONLY with an identical contact and >=95% textual similarity in the last seven days.
    const recent=await sql("SELECT * FROM mm_jobs WHERE source_id IS NOT NULL AND contact=$1 AND created_at>NOW()-INTERVAL '7 days' ORDER BY created_at DESC LIMIT 50",contact);
@@ -274,6 +279,15 @@ async function onSourcePost(m) {
 }
 async function adminAction(u,t){
  const id=u.id;if(!admin.includes(String(id)))return false;
+ const block=t.match(/^\/source_block\s+(-?\d+)\s+(@[A-Za-z0-9_]{5,32})$/);
+ if(block){
+  const source=Number(block[1]),contact=block[2].toLowerCase();
+  await sql("INSERT INTO mm_source_blacklist(source_id,contact) VALUES($1,$2) ON CONFLICT DO NOTHING",source,contact);
+  await sql("UPDATE mm_jobs SET status='rejected' WHERE source_id=$1 AND contact=$2 AND status='active'",source,contact);
+  await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES($1,'source_block',$2::jsonb)",id,JSON.stringify({source,contact}));
+  await send(id,"Контакт заблокирован для указанного источника.");
+  return true;
+ }
  const add=t.match(/^\/source_add\s+(-?\d+)(?:\s+([^|]+))?(?:\|(.+))?$/);
  if(add){
    const source=Number(add[1]),city=(add[2]||"").trim(),topic=(add[3]||"").trim();
