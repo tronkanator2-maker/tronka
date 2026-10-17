@@ -112,7 +112,7 @@ function validJob(p){
  return [...new Set(missing)];
 }
 async function profile(to,u,heading="Анкета"){if(!u.profile||!Object.keys(u.profile).length)return;const reviews=await feedbackSummary(u.id,sql); if((u.photos||[]).length>1)await call("sendMediaGroup",{chat_id:to,media:u.photos.slice(0,5).map(x=>({type:"photo",media:x}))});else if(u.photo)await call("sendPhoto",{chat_id:to,photo:u.photo});return send(to,"<b>"+esc(heading)+"</b>\n"+Object.entries(u.profile).filter(([k])=>!/дата рождения|телефон|telegram|instagram|фио/i.test(k)).map(([k,v])=>esc(k)+": "+esc(sourcePublicText(v))).join("\n")+"\nКонтакты скрыты.\n\n"+reviews.text,buttons([[["✉️ Пригласить","invite:"+u.id]],...(reviews.count?[[["⭐ Все отзывы ("+reviews.count+")","allreviews:"+u.id+":0"]]]:[]),[["⚠️ Пожаловаться","reportuser:"+u.id]]]))}
-async function card(to,j){let p=j.body;let lines=["<b>📢 "+esc(get(p,"название заявки"))+"</b>","Кого ищу: "+esc(get(p,"кого ищу")),"Тип работы: "+esc(get(p,"тип работы")),"Город: "+esc(get(p,"город")),"Требования: "+esc(get(p,"требования")||"не указано"),"Оплата: "+esc(get(p,"формат и оплата")),"Дата: "+esc(get(p,"дата съёмки")||"не указана"),"",esc(sourcePublicText(get(p,"описание")))];if(get(p,"метка темы"))lines.push("Тематика: "+esc(get(p,"метка темы")));if(j.owner===0)lines.push("Заказчик не зарегистрирован в боте — анкеты и отзывов о нём пока нет.");return send(to,lines.join("\n"),buttons([[["✋ Откликнуться","reply:"+j.id]],[["⚠️ Пожаловаться","reportjob:"+j.id]]]))}
+async function card(to,j){let p=j.body;let lines=["<b>📢 "+esc(get(p,"название заявки"))+"</b>","Кого ищу: "+esc(get(p,"кого ищу")),"Тип работы: "+esc(get(p,"тип работы")),"Город: "+esc(get(p,"город")),"Требования: "+esc(get(p,"требования")||"не указано"),"Оплата: "+esc(get(p,"формат и оплата")),"Дата: "+esc(get(p,"дата съёмки")||"не указана"),"",esc(j.owner===0?sourceJobDisplayText(get(p,"описание")):sourcePublicText(get(p,"описание")))];if(get(p,"метка темы"))lines.push("Тематика: "+esc(get(p,"метка темы")));if(j.owner===0)lines.push("Заказчик не зарегистрирован в боте — анкеты и отзывов о нём пока нет.");return send(to,lines.join("\n"),buttons([[["✋ Откликнуться","reply:"+j.id]],[["⚠️ Пожаловаться","reportjob:"+j.id]]]))}
 async function matches(u,j){
  if(!u||u.blocked||u.suspended||!u.active||!allConsentsCurrent(u.consent,await currentDocumentHashes())||!eligibleProfile(u.profile,u.photo)||j.paused||j.status!=="active")return false;
  const p=u.profile;
@@ -143,7 +143,10 @@ async function deliverTo(u,j){
 }
 async function safetyOnce(u){
  const r=await sql("UPDATE mm_users SET first_safety_sent_at=NOW() WHERE id=$1 AND first_safety_sent_at IS NULL RETURNING id",u.id);
- if(r.length)await send(u.id,"<b>Безопасность</b>\nМир моделей помогает с поиском, но не организует съёмки и не участвует в оплате. Проверяйте условия, не переводите деньги за сомнительные кастинги и сообщайте о подозрительных предложениях через поддержку.");
+ if(r.length){
+ const base=(Bun.env.PUBLIC_URL||"").replace(/\/$/,"");
+ await send(u.id,"<b>Безопасность</b>\n«Мир моделей» помогает найти исполнителей и съёмки, но не организует сделки, не проверяет заявления участников и не участвует в оплате. Уточняйте условия заранее, не отправляйте неизвестным людям предоплаты и личные материалы. Что сделать перед съёмкой: прочитайте памятку и сообщайте о подозрительных объявлениях.",buttons([[["📚 Прочитать памятку","articles"],["⚠️ Сообщить о проблеме","support"]]]));
+}
 }
 // Webhooks enqueue work; a durable worker sends to recipients in bounded batches.
 async function dispatch(j){
@@ -420,6 +423,7 @@ if(a.startsWith("declineresponse:")){
 }
 if(a.startsWith("reportjob:")||a.startsWith("reportuser:")||a==="report"||a==="support"){const f={...(u.filters||{})};f.reportTarget=a.startsWith("reportjob:")?{job:Number(a.slice(10))}:a.startsWith("reportuser:")?{user:Number(a.slice(11))}:{};await change(id,{state:"support",filters:f});return send(id,"Опишите причину своими словами. Можно приложить скриншот.")}}
 
+function sourceJobDisplayText(raw){return sourcePublicText(raw).replace(/https?:\/\/\S+|www\.\S+/gi,"[ссылка скрыта]");}
 function sourcePublicText(raw) {
  return String(raw||"").replace(/(?:https?:\/\/)?t\.me\/[a-zA-Z0-9_]{5,32}/gi,"[контакт скрыт]")
  .replace(/(?:^|[\s(])@[A-Za-z0-9_]{5,32}\b/g," [контакт скрыт]")
