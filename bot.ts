@@ -1,4 +1,5 @@
 import {SQL} from "bun";
+import {redactContacts,publicProfileEntries,publicProfileAllowed} from "./visibility.ts";
 import {adminApp} from "./admin.ts";
 import {setupSourceHealth,allowanceForModel,reviewSourceHealth} from "./source-health.ts";
 import {payMatches,formatMatches} from "./pricing.ts";
@@ -113,7 +114,23 @@ function validJob(p){
  if(get(p,"дата съёмки")&&jobExpiresAt(get(p,"дата съёмки")).getTime()<Date.now())missing.push("дата съёмки уже прошла");
  return [...new Set(missing)];
 }
-async function profile(to,u,heading="Анкета"){if(!u.profile||!Object.keys(u.profile).length)return;const reviews=await feedbackSummary(u.id,sql); if((u.photos||[]).length>1){const media=await call("sendMediaGroup",{chat_id:to,media:u.photos.slice(0,5).map(x=>({type:"photo",media:x}))});if(!media.ok)throw Error("Telegram media group delivery failed")}else if(u.photo){const photo=await call("sendPhoto",{chat_id:to,photo:u.photo});if(!photo.ok)throw Error("Telegram profile photo delivery failed")}return send(to,"<b>"+esc(heading)+"</b>\n"+(ageAt(get(u.profile,"дата рождения"))!==null?"Возраст: "+ageAt(get(u.profile,"дата рождения"))+"\n":"")+Object.entries(u.profile).filter(([k])=>!/дата рождения|телефон|telegram|instagram|фио/i.test(k)).map(([k,v])=>esc(k)+": "+esc(sourcePublicText(v))).join("\n")+"\nКонтакты скрыты.\n\n"+reviews.text,buttons([[["✉️ Пригласить","invite:"+u.id]],...(reviews.count?[[["⭐ Все отзывы ("+reviews.count+")","allreviews:"+u.id+":0"]]]:[]),[["⚠️ Пожаловаться","reportuser:"+u.id]]]))}
+async function profile(to,u,heading="Анкета"){
+ if(!u.profile||!Object.keys(u.profile).length)return;
+ const reviews=await feedbackSummary(u.id,sql);
+ if((u.photos||[]).length>1){
+  const result=await call("sendMediaGroup",{chat_id:to,media:u.photos.slice(0,5).map(file=>({type:"photo",media:file}))});
+  if(!result.ok)throw Error("Telegram media group delivery failed");
+ } else if(u.photo){
+  const photo=await call("sendPhoto",{chat_id:to,photo:u.photo});
+  if(!photo.ok)throw Error("Telegram profile photo delivery failed");
+ }
+ const age=ageAt(get(u.profile,"дата рождения"));
+ const content="<b>"+esc(heading)+"</b>\n"+
+   (age!==null?"Возраст: "+age+"\n":"")+
+   publicProfileEntries(u.profile).map(([k,v])=>esc(k)+": "+esc(v)).join("\n")+
+   "\nКонтакты скрыты до принятого приглашения или отклика.\n\n"+reviews.text;
+ return send(to,content,buttons([[["✉️ Пригласить","invite:"+u.id]],...(reviews.count?[[["⭐ Все отзывы ("+reviews.count+")","allreviews:"+u.id+":0"]]]:[]),[["⚠️ Пожаловаться","reportuser:"+u.id]]]));
+}
 async function card(to,j){let p=j.body;let lines=["<b>📢 "+esc(get(p,"название заявки"))+"</b>","Кого ищу: "+esc(get(p,"кого ищу")),"Тип работы: "+esc(get(p,"тип работы")),"Город: "+esc(get(p,"город")),"Требования: "+esc(get(p,"требования")||"не указано"),"Оплата: "+esc(get(p,"формат и оплата")),"Дата: "+esc(get(p,"дата съёмки")||"не указана"),"",esc(j.owner===0?sourceJobDisplayText(get(p,"описание")):sourcePublicText(get(p,"описание")))];if(get(p,"метка темы"))lines.push("Тематика: "+esc(get(p,"метка темы")));if(j.owner===0)lines.push("Заказчик не зарегистрирован в боте — анкеты и отзывов о нём пока нет.");return send(to,lines.join("\n"),buttons([[["✋ Откликнуться","reply:"+j.id]],[["⚠️ Пожаловаться","reportjob:"+j.id]]]))}
 async function matches(u,j){
  if(!u||u.blocked||u.suspended||!u.active||!allConsentsCurrent(u.consent,await currentDocumentHashes())||!eligibleProfile(u.profile,u.photo)||j.paused||j.status!=="active")return false;
@@ -548,11 +565,7 @@ if(a.startsWith("declineresponse:")){
 if(a.startsWith("reportjob:")||a.startsWith("reportuser:")||a==="report"||a==="support"){const f={...(u.filters||{})};f.reportTarget=a.startsWith("reportjob:")?{job:Number(a.slice(10))}:a.startsWith("reportuser:")?{user:Number(a.slice(11))}:{};await change(id,{state:"support",filters:f});return send(id,"Опишите причину своими словами. Можно приложить скриншот.")}}
 
 function sourceJobDisplayText(raw){return sourcePublicText(raw).replace(/https?:\/\/\S+|www\.\S+/gi,"[ссылка скрыта]");}
-function sourcePublicText(raw) {
- return String(raw||"").replace(/(?:https?:\/\/)?t\.me\/[a-zA-Z0-9_]{5,32}/gi,"[контакт скрыт]")
- .replace(/(?:^|[\s(])@[A-Za-z0-9_]{5,32}\b/g," [контакт скрыт]")
- .replace(/(?:\+7|8)[\d\s()\-]{9,16}\d/g,"[контакт скрыт]");
-}
+function sourcePublicText(raw){return redactContacts(raw)}
 let collectorInboxRunning=false;
 async function consumeCollectorInbox(){
  if(collectorInboxRunning)return;
