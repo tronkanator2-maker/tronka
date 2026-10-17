@@ -501,6 +501,7 @@ async function onMessage(m){
  }
  let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
  if(t==="/cancel"){const f=discardProfileDraft(u.filters);delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
+ if(t==="/help")return send(id,"ℹ️ <b>Мир моделей</b>\n/start — главное меню\n/demo — попробовать без анкеты\n/cancel — отмена текущего действия\n/mydata — экспорт своих данных\n/deleteaccount — удалить аккаунт\n\n🧪 Сейчас включён тестовый режим. Используйте вымышленные данные.",buttons([[["👤 Моя анкета","profile"],["ℹ️ Как работает","how"]],[["🏠 В меню","home"]]]));
  if(t==="/teststatus")return send(id,testMode()?"🧪 Тестовый режим активен. Регистрация открыта: "+(testReady()?"да":"нет")+"\nПлатежи отключены.\nТелефон не требуется.":"Тестовый режим выключен.");if(t==="/mydata"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Данных нет.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Не получилось отправить архив. Попробуйте позже.");return;}
  if(t==="/deleteaccount"){await change(id,{state:"delete_confirm"});return send(id,"<b>Удалить аккаунт и данные?</b>\nЭто удалит анкету, фотографии из нашей базы, ваши заявки, историю откликов, отзывов, приглашений, согласий и обращений. Сообщения, ранее отправленные другим пользователям Telegram, стереть удалённо нельзя.\n\nПодтвердите удаление отдельной кнопкой.",buttons([[["❌ Удалить мои данные","deleteaccount:confirm"]],[["Отмена","deleteaccount:cancel"]]]));}if(t==="/subscription"&&testMode())return send(id,"🧪 Тестовый доступ: лимиты заявок, откликов и приглашений для проверки сняты. Настоящие платежи выключены.");if(t==="/subscription")return send(id,hasPaidAccess(u)?"⭐ Подписка или пробный период активны до "+esc(new Date(u.access_until&&new Date(u.access_until)>new Date(u.trial_until||0)?u.access_until:u.trial_until).toLocaleDateString("ru-RU")):"Бесплатный доступ: один отклик, одна заявка и одно приглашение в календарную неделю.");if(t.startsWith("/start")){
  if(u.state==="relay"){const filters={...(u.filters||{})};delete filters.relayPeer;await change(id,{state:"",filters});u={...u,state:"",filters};}
@@ -1067,4 +1068,14 @@ if(token&&secret&&Bun.env.PUBLIC_URL)(async()=>{
  if(expected&&expected!==actual){console.error("BOT_USERNAME does not match the configured token; check Railway settings.");return}
  const result=await call("setWebhook",{url:Bun.env.PUBLIC_URL.replace(/\/$/,"")+"/webhook",secret_token:secret,allowed_updates:["message","channel_post","callback_query"]});
  console.log("Webhook configured",!!result.ok);
+ const commands=[
+  {command:"start",description:"Открыть главное меню"},
+  {command:"help",description:"Как пользоваться ботом"},
+  {command:"demo",description:"Показать демо"},
+  {command:"cancel",description:"Отменить действие"},
+  {command:"mydata",description:"Экспортировать мои данные"},
+  {command:"deleteaccount",description:"Удалить мой аккаунт"}
+ ];
+ const installed=await call("setMyCommands",{commands});
+ console.log("Telegram command menu configured",!!installed.ok);
 })().catch(e=>console.error("Telegram setup",String(e)));
