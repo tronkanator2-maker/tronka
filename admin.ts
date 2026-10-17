@@ -148,7 +148,7 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
   else if(action==="source_off")await sql("UPDATE mm_sources SET active=FALSE WHERE id=$1",id);
   else if(action==="approve"){const jobs=await sql("UPDATE mm_jobs SET status='active' WHERE id=$1 AND status='pending' RETURNING *",id);if(jobs.length&&onApprove)await onApprove(jobs[0])}
   else if(action==="reject")await sql("UPDATE mm_jobs SET status='rejected' WHERE id=$1 AND status='pending'",id);
-  else if(action==="block")await sql("UPDATE mm_users SET blocked=TRUE WHERE id=$1",id);
+  else if(action==="block"){await sql("UPDATE mm_users SET blocked=TRUE WHERE id=$1",id);await sql("UPDATE mm_jobs SET paused=TRUE WHERE owner=$1 AND status='active'",id);}
   else if(action==="unblock")await sql("UPDATE mm_users SET blocked=FALSE,suspended=FALSE WHERE id=$1",id);
   else return json({error:"Неизвестное действие"},400);
   await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,$1,$2::jsonb)",action,JSON.stringify({target:id}));
