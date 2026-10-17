@@ -155,7 +155,7 @@ async function safetyOnce(u){
 }
 // Webhooks enqueue work; a durable worker sends to recipients in bounded batches.
 async function dispatch(j){
- await sql("INSERT INTO mm_fanout_queue(job_id) VALUES($1) ON CONFLICT(job_id) DO UPDATE SET pending=TRUE,completed_at=NULL,next_attempt_at=NOW()",j.id);
+ await sql("INSERT INTO mm_fanout_queue(job_id) VALUES($1) ON CONFLICT(job_id) DO UPDATE SET pending=TRUE,cursor_id=0,profiles_done=FALSE,attempts=0,completed_at=NULL,next_attempt_at=NOW()",j.id);
 }
 let fanoutRunning=false;
 async function runFanoutBatch(){
@@ -470,7 +470,9 @@ if(a.startsWith("updatejob:")){
  }
  return send(id,"✅ Заявка №"+jobId+" обновлена. Новая версия доступна в поиске.");
 }
-if(a.startsWith("jobpause:")){const rows=await sql("UPDATE mm_jobs SET paused=NOT paused WHERE id=$1 AND owner=$2 AND status='active' RETURNING paused",Number(a.slice(9)),id);return send(id,rows.length?(rows[0].paused?"Поиск анкет по этой заявке остановлен.":"Поиск анкет по этой заявке возобновлён."):"Заявка недоступна.")}if(a.startsWith("close:")){await sql("UPDATE mm_jobs SET status='closed' WHERE id=$1 AND owner=$2",+a.slice(6),id);return send(id,"Заявка закрыта.")}if(a==="home")return begin(u);
+if(a.startsWith("jobpause:")){const rows=await sql("UPDATE mm_jobs SET paused=NOT paused WHERE id=$1 AND owner=$2 AND status='active' RETURNING *",Number(a.slice(9)),id);
+ if(rows.length&&!rows[0].paused)await dispatch(rows[0]);
+ return send(id,rows.length?(rows[0].paused?"Поиск анкет по этой заявке остановлен.":"Поиск анкет по этой заявке возобновлён."):"Заявка недоступна.")}if(a.startsWith("close:")){await sql("UPDATE mm_jobs SET status='closed' WHERE id=$1 AND owner=$2",+a.slice(6),id);return send(id,"Заявка закрыта.")}if(a==="home")return begin(u);
  if(a.startsWith("browse_role:")){
   const key=a.slice("browse_role:".length);
   const role=key==="all"?"":ROLES[Number(key)];
