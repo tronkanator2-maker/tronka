@@ -1,4 +1,5 @@
 import {publishDocument} from "./documents.ts";
+import {inferCity} from "./engine.ts";
 // Minimal secured operational dashboard. Disabled until both ADMIN_PASSWORD and ADMIN_TOTP_SECRET are configured.
 // Session tokens are only kept in memory; no user data is exposed to unauthenticated requests.
 const sessions = new Map();
@@ -54,6 +55,7 @@ const appHtml = [
  '<section id="dashboard" style="display:none"><div class="panel"><button data-op="refresh">Обновить</button><button data-op="logout">Выйти</button><p id="counters"></p></div>',
  '<div class="panel"><h2>Юридические документы</h2><p>Публикуйте только утверждённые юристом тексты. Новая редакция сохранится отдельно от предыдущей.</p><form id="documentForm"><select name="slug"><option value="offer">Оферта</option><option value="rules">Правила</option><option value="privacy">Политика конфиденциальности</option><option value="processing">Обработка данных</option><option value="distribution">Распространение анкеты</option><option value="esignature">Электронная подпись</option><option value="overview">Обзор функционала</option><option value="safety">Безопасность</option><option value="portfolio">Портфолио</option></select><input name="title" placeholder="Название"><textarea name="body" placeholder="Полный текст утверждённого документа" rows="8" required></textarea><button>Опубликовать новую версию</button></form><p><a href="/documents">Открыть документы</a></p></div>',
  '<div class="panel"><h2>Источники Telegram</h2><form id="source"><input name="id" placeholder="-100... ID источника" required><input name="city" placeholder="Город"><input name="topic" placeholder="Тема"><button>Добавить / включить</button></form><pre id="sources"></pre></div>',
+ '<div class="panel"><h2>Найденные источники, требующие проверки</h2><p>Подключайте источник только после проверки причин риска и законности объявлений.</p><form id="candidateForm"><input name="id" placeholder="ID найденного источника" required><select name="action"><option value="candidate_reject">Отклонить</option><option value="candidate_approve">Подключить после проверки</option></select><button>Применить</button></form><pre id="candidates"></pre></div>',
  '<div class="panel"><h2>Модерация</h2><form id="decision"><input name="id" placeholder="№ заявки" required><select name="action"><option value="approve">Одобрить</option><option value="reject">Отклонить</option></select><button>Применить</button></form><pre id="pending"></pre></div>',
  '<div class="panel"><h2>Обращения</h2><form id="ticketForm"><input name="id" placeholder="Номер обращения" required><textarea name="message" placeholder="Ответ пользователю от имени бота" rows="3" required></textarea><button>Ответить</button></form><form id="ticketStatus"><input name="id" placeholder="Номер обращения" required><select name="status"><option value="in_progress">В работе</option><option value="closed">Закрыто</option><option value="new">Новое</option></select><button>Изменить статус</button></form><pre id="reports"></pre></div>',
  '<div class="panel"><h2>Пользователи</h2><form id="usersForm"><input name="id" placeholder="Telegram ID" required><select name="action"><option value="block">Заблокировать</option><option value="unblock">Разблокировать</option></select><button>Применить</button></form><pre id="users"></pre></div></section><p id="msg"></p>',
@@ -61,13 +63,13 @@ const appHtml = [
  'const $=x=>document.getElementById(x);',
  'async function api(path,body){const r=await fetch("/admin/"+path,{method:body?"POST":"GET",headers:{"content-type":"application/json"},body:body?JSON.stringify(body):undefined,credentials:"same-origin"});const d=await r.json();if(!r.ok)throw Error(d.error||"Ошибка");return d}',
  'const view=(id,obj)=>{$(id).textContent=typeof obj==="string"?obj:JSON.stringify(obj,null,2)};',
- 'async function refresh(){try{const d=await api("data");$("login").style.display="none";$("dashboard").style.display="block";view("counters",d.stats);view("sources",d.sources);view("pending",d.pending);view("reports",d.reports);view("users",d.users);$("msg").textContent=""}catch(e){$("dashboard").style.display="none";$("login").style.display="block";$("msg").textContent=e.message}}',
+ 'async function refresh(){try{const d=await api("data");$("login").style.display="none";$("dashboard").style.display="block";view("counters",d.stats);view("sources",d.sources);view("candidates",d.candidates);view("pending",d.pending);view("reports",d.reports);view("users",d.users);$("msg").textContent=""}catch(e){$("dashboard").style.display="none";$("login").style.display="block";$("msg").textContent=e.message}}',
  '$("form").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("login",{password:f.get("password"),otp:f.get("otp")});e.target.reset();refresh()}catch(err){$("msg").textContent=err.message}};',
  '$("documentForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);if(!confirm("Вы уверены, что документ юридически утверждён?"))return;try{const result=await api("action",{action:"document_publish",slug:f.get("slug"),title:f.get("title"),body:f.get("body")});$("msg").textContent="Опубликована версия "+result.document.version;refresh()}catch(err){$("msg").textContent=err.message}};',
  '$("source").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:"source_add",id:f.get("id"),city:f.get("city"),topic:f.get("topic")});refresh()}catch(err){$("msg").textContent=err.message}};',
  '$("ticketForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:"ticket_reply",id:f.get("id"),message:f.get("message")});e.target.reset();refresh()}catch(err){$("msg").textContent=err.message}};',
  '$("ticketStatus").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:"ticket_status",id:f.get("id"),status:f.get("status")});refresh()}catch(err){$("msg").textContent=err.message}};',
- 'for(const formId of ["decision","usersForm"]){$(formId).onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:f.get("action"),id:f.get("id")});refresh()}catch(err){$("msg").textContent=err.message}}}',
+ 'for(const formId of ["candidateForm","decision","usersForm"]){$(formId).onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:f.get("action"),id:f.get("id")});refresh()}catch(err){$("msg").textContent=err.message}}}',
  'document.querySelector("[data-op=refresh]").onclick=refresh;',
  'document.querySelector("[data-op=logout]").onclick=async()=>{await api("logout",{});refresh()};',
  'refresh();</script></main></body></html>'
@@ -108,14 +110,15 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
   return json({ok:true},200,{"set-cookie":"mm_admin=; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=0"});
  }
  if(url.pathname==="/admin/data"&&req.method==="GET"){
-  const [[stats],sources,pending,reports,users]=await Promise.all([
+  const [[stats],sources,candidates,pending,reports,users]=await Promise.all([
     sql("SELECT (SELECT count(*) FROM mm_users)::int users,(SELECT count(*) FROM mm_jobs)::int jobs,(SELECT count(*) FROM mm_jobs WHERE source_id IS NOT NULL)::int imported,(SELECT count(*) FROM mm_responses)::int responses,(SELECT count(*) FROM mm_sources WHERE active)::int active_sources,(SELECT count(*) FROM mm_jobs WHERE status='pending')::int pending"),
     sql("SELECT id,title,city,topic,active,mode,last_seen_at,disabled_reason,created_at FROM mm_sources ORDER BY created_at DESC LIMIT 100"),
+    sql("SELECT id,username,title,reason,unique30,total30,checked_at FROM mm_candidate_sources WHERE status='needs_review' ORDER BY checked_at DESC LIMIT 50"),
     sql("SELECT id,body,source_id,created_at FROM mm_jobs WHERE status='pending' ORDER BY id LIMIT 30"),
     sql("SELECT id,reporter,target_user,target_job,kind,status,body,created_at,updated_at FROM mm_reports_v2 ORDER BY id DESC LIMIT 40"),
     sql("SELECT id,username,first_name,active,blocked,suspended,created_at FROM mm_users ORDER BY created_at DESC LIMIT 40")
   ]);
-  return json({stats,sources,pending,reports,users});
+  return json({stats,sources,candidates,pending,reports,users});
  }
  if(url.pathname==="/admin/action"&&req.method==="POST"){
   let data;try{data=await req.json()}catch{return json({error:"Некорректный запрос"},400)}
@@ -144,7 +147,17 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
     await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,'ticket_status',$1::jsonb)",JSON.stringify({id,status}));
     return json({ok:true});
   }
-  if(action==="source_add")await sql("INSERT INTO mm_sources(id,city,topic,active) VALUES($1,$2,$3,TRUE) ON CONFLICT(id) DO UPDATE SET city=EXCLUDED.city,topic=EXCLUDED.topic,active=TRUE,mode='trial',disabled_reason=NULL,disabled_at=NULL",id,String(data.city||"").slice(0,90),String(data.topic||"").slice(0,90));
+  if(action==="candidate_approve"||action==="candidate_reject"){
+   const candidate=(await sql("SELECT * FROM mm_candidate_sources WHERE id=$1 AND status='needs_review'",id))[0];
+   if(!candidate)return json({error:"Источник не найден в очереди"},404);
+   if(action==="candidate_approve"){
+     await sql("INSERT INTO mm_sources(id,title,city,topic,username,active,mode) VALUES($1,$2,$3,'',$4,TRUE,'trial') ON CONFLICT(id) DO UPDATE SET active=TRUE,mode='trial',disabled_reason=NULL",id,candidate.title||"",inferCity(candidate.title||"",""),candidate.username||null);
+   }
+   await sql("UPDATE mm_candidate_sources SET status=$1,reason=$2,checked_at=NOW() WHERE id=$3",action==="candidate_approve"?"active":"rejected",action==="candidate_approve"?"Вручную проверено владельцем":"Отклонено владельцем",id);
+   await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,$1,$2::jsonb)",action,JSON.stringify({target:id}));
+   return json({ok:true});
+ }
+ if(action==="source_add")await sql("INSERT INTO mm_sources(id,city,topic,active) VALUES($1,$2,$3,TRUE) ON CONFLICT(id) DO UPDATE SET city=EXCLUDED.city,topic=EXCLUDED.topic,active=TRUE,mode='trial',disabled_reason=NULL,disabled_at=NULL",id,String(data.city||"").slice(0,90),String(data.topic||"").slice(0,90));
   else if(action==="source_off")await sql("UPDATE mm_sources SET active=FALSE WHERE id=$1",id);
   else if(action==="approve"){const jobs=await sql("UPDATE mm_jobs SET status='active' WHERE id=$1 AND status='pending' RETURNING *",id);if(jobs.length&&onApprove)await onApprove(jobs[0])}
   else if(action==="reject")await sql("UPDATE mm_jobs SET status='rejected' WHERE id=$1 AND status='pending'",id);
