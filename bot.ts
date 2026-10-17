@@ -503,6 +503,7 @@ async function onMessage(m){
  if(t==="/cancel"){const f=discardProfileDraft(u.filters);delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
  if(t==="/teststatus")return send(id,testMode()?"🧪 Тестовый режим активен. Регистрация открыта: "+(testReady()?"да":"нет")+"\nПлатежи отключены.\nТелефон не требуется.":"Тестовый режим выключен.");if(t==="/mydata"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Данных нет.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Не получилось отправить архив. Попробуйте позже.");return;}
  if(t==="/deleteaccount"){await change(id,{state:"delete_confirm"});return send(id,"<b>Удалить аккаунт и данные?</b>\nЭто удалит анкету, фотографии из нашей базы, ваши заявки, историю откликов, отзывов, приглашений, согласий и обращений. Сообщения, ранее отправленные другим пользователям Telegram, стереть удалённо нельзя.\n\nПодтвердите удаление отдельной кнопкой.",buttons([[["❌ Удалить мои данные","deleteaccount:confirm"]],[["Отмена","deleteaccount:cancel"]]]));}if(t==="/subscription"&&testMode())return send(id,"🧪 Тестовый доступ: лимиты заявок, откликов и приглашений для проверки сняты. Настоящие платежи выключены.");if(t==="/subscription")return send(id,hasPaidAccess(u)?"⭐ Подписка или пробный период активны до "+esc(new Date(u.access_until&&new Date(u.access_until)>new Date(u.trial_until||0)?u.access_until:u.trial_until).toLocaleDateString("ru-RU")):"Бесплатный доступ: один отклик, одна заявка и одно приглашение в календарную неделю.");if(t.startsWith("/start")){
+ if(u.state==="relay"){const filters={...(u.filters||{})};delete filters.relayPeer;await change(id,{state:"",filters});u={...u,state:"",filters};}
  const payload=t.trim().split(/\s+/)[1]||"";
  if(/^ref_\d{2,19}$/.test(payload)){
   const inviter=Number(payload.slice(4));
@@ -777,7 +778,10 @@ if(a.startsWith("updatejob:")){
 }
 if(a.startsWith("jobpause:")){const rows=await sql("UPDATE mm_jobs SET paused=NOT paused WHERE id=$1 AND owner=$2 AND status='active' RETURNING *",Number(a.slice(9)),id);
  if(rows.length&&!rows[0].paused)await dispatch(rows[0]);
- return send(id,rows.length?(rows[0].paused?"Поиск анкет по этой заявке остановлен.":"Поиск анкет по этой заявке возобновлён."):"Заявка недоступна.")}if(a.startsWith("close:")){await sql("UPDATE mm_jobs SET status='closed' WHERE id=$1 AND owner=$2",+a.slice(6),id);return send(id,"Заявка закрыта.")}if(a==="home")return begin(u);
+ return send(id,rows.length?(rows[0].paused?"Поиск анкет по этой заявке остановлен.":"Поиск анкет по этой заявке возобновлён."):"Заявка недоступна.")}if(a.startsWith("close:")){await sql("UPDATE mm_jobs SET status='closed' WHERE id=$1 AND owner=$2",+a.slice(6),id);return send(id,"Заявка закрыта.")}if(a==="home"){
+ if(u.state==="relay"){const filters={...(u.filters||{})};delete filters.relayPeer;await change(id,{state:"",filters});return begin({...u,state:"",filters});}
+ return begin(u);
+}
  if(a.startsWith("browse_role:")){
   const key=a.slice("browse_role:".length);
   const role=key==="all"?"":ROLES[Number(key)];
@@ -879,8 +883,10 @@ if(a.startsWith("acceptresponse:")){
 }
 if(a.startsWith("declineresponse:")){
  const rId=Number(a.slice("declineresponse:".length));
- const rows=await sql("UPDATE mm_responses r SET status='declined' FROM mm_jobs j WHERE r.id=$1 AND r.job_id=j.id AND j.owner=$2 AND r.status='pending' RETURNING r.id",rId,id);
- return send(id,rows.length?"Отклик отклонён.":"Отклик уже обработан.");
+ const rows=await sql("UPDATE mm_responses r SET status='declined' FROM mm_jobs j WHERE r.id=$1 AND r.job_id=j.id AND j.owner=$2 AND r.status='pending' RETURNING r.id,r.user_id",rId,id);
+ if(!rows.length)return send(id,"Отклик уже обработан.");
+ try{await send(rows[0].user_id,"К сожалению, ваш отклик №"+rId+" отклонён. Другие заявки можно найти в главном меню.")}catch(e){console.error("Declined response notification",String(e))}
+ return send(id,"Отклик отклонён, участнику отправлено уведомление.");
 }
 if(a.startsWith("reportjob:")||a.startsWith("reportuser:")||a==="report"||a==="support"){const f={...(u.filters||{})};f.reportTarget=a.startsWith("reportjob:")?{job:Number(a.slice(10))}:a.startsWith("reportuser:")?{user:Number(a.slice(11))}:{};await change(id,{state:"support",filters:f});return send(id,"Опишите причину своими словами. Можно приложить скриншот.")}}
 
