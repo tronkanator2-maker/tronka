@@ -427,19 +427,21 @@ async function finishWizard(u){
  const summary=Object.entries(draft).map(([key,value])=>esc(key)+": "+esc(value)).join("\n");
  return send(u.id,"✅ <b>Анкета заполнена</b>\n\n"+summary+"\n\nТеперь сохраните анкету и добавьте главное фото.",buttons([[["✅ Сохранить анкету","profile_save"],["✏️ Исправить","edit_profile"]]]));
 }
-async function showWizardRolePage(id,page=0){
+async function showWizardRolePage(id,page=0,selected=[]){
  const perPage=8,totalPages=Math.ceil(WIZARD_ROLES.length/perPage);
- const current=Math.max(0,Math.min(totalPages-1,page));
+ const current=Math.max(0,Math.min(totalPages-1,page)),chosen=Array.isArray(selected)?selected:[];
  const roles=WIZARD_ROLES.slice(current*perPage,(current+1)*perPage),rows=[];
- for(let i=0;i<roles.length;i+=2)rows.push(roles.slice(i,i+2).map((role,offset)=>[role,"wizard:role:"+(current*perPage+i+offset)]));
+ for(let i=0;i<roles.length;i+=2)rows.push(roles.slice(i,i+2).map((role,offset)=>[(chosen.includes(role)?"✅ ":"☐ ")+role,"wizard:role:"+(current*perPage+i+offset)]));
  const paging=[];
  if(current>0)paging.push(["◀️ Назад","wizard:page:"+(current-1)]);
  if(current<totalPages-1)paging.push(["Дальше ▶️","wizard:page:"+(current+1)]);
  if(paging.length)rows.push(paging);
- rows.push([["🏠 В меню","home"]]);
- return send(id,"🪄 <b>Анкета · выберите профессию</b>\nСтраница "+(current+1)+" из "+totalPages+"\n\nЗатем бот задаст короткие вопросы. Большие шаблоны копировать не нужно.",buttons(rows));
+ rows.push([["➡️ Продолжить ("+chosen.length+")","wizard:roles_done"]]);
+ rows.push([["❌ Отмена","wizard:cancel"]]);
+ return send(id,"🪄 <b>Анкета · кто вы?</b>\nСтраница "+(current+1)+" из "+totalPages+
+  "\n\nМожно выбрать несколько профессий. «Модель» и «актёр» совместимы друг с другом, но не со специальностями съёмочной команды."+
+  "\n\nВыбрано: "+esc(chosen.join(", ")||"пока ничего"),buttons(rows));
 }
-
 async function startWizard(u,role){
  if(!WIZARD_ROLES.includes(role))return send(u.id,"Выберите профессию из списка.");
  const profile={...profileDraftOf(u),"кто вы":role};
@@ -727,20 +729,34 @@ if(a==="more")return send(id,"⚙️ <b>Дополнительно</b>\nИнфо
  return send(id,"🎁 Пригласите друга в «Мир моделей»!\nВаша ссылка: "+esc(link)+"\nПо ссылке пришли: "+count+"\nСкидки по реферальной программе заработают после подключения оплаты.");
 }
 if(a==="docs")return send(id,"Все опубликованные документы сервиса: "+esc((Bun.env.PUBLIC_URL||"").replace(/\/$/,"")+"/documents"));if(a==="go")return begin(u);
- if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))return begin(u);if(!testMode()&&(!u.phone||!u.username))return begin(u);if(a==="profile"){if(Object.keys(u.profile||{}).length)await profile(id,u,"Ваша анкета");return send(id,"Выберите удобный способ заполнения. Можно отвечать на вопросы по одному, либо отправить шаблон одним сообщением.",buttons([[["🪄 Заполнить по шагам","profile_wizard"]],[["📝 Отправить шаблон","edit_profile"],["📷 Добавить фото","addphoto"]]]))}if(a==="profile_wizard")return showWizardRolePage(id,0);
+ if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))return begin(u);if(!testMode()&&(!u.phone||!u.username))return begin(u);if(a==="profile"){if(Object.keys(u.profile||{}).length)await profile(id,u,"Ваша анкета");return send(id,"Выберите удобный способ заполнения. Можно отвечать на вопросы по одному, либо отправить шаблон одним сообщением.",buttons([[["🪄 Заполнить по шагам","profile_wizard"]],[["📝 Отправить шаблон","edit_profile"],["📷 Добавить фото","addphoto"]]]))}if(a==="profile_wizard"){
+  const selected=String(u.filters?.wizardSelected?.join(",")||get(profileDraftOf(u),"кто вы")).split(",").map(x=>x.trim()).filter(x=>WIZARD_ROLES.includes(x));
+  await change(id,{filters:{...(u.filters||{}),wizardSelected:selected}});
+  return showWizardRolePage(id,0,selected);
+ }
  if(a.startsWith("wizard:page:")){
   const page=Number(a.slice("wizard:page:".length));
-  return showWizardRolePage(id,Number.isInteger(page)?page:0);
+  return showWizardRolePage(id,Number.isInteger(page)?page:0,u.filters?.wizardSelected||[]);
  }
  if(a.startsWith("wizard:role:")){
-  const role=WIZARD_ROLES[Number(a.slice("wizard:role:".length))];
-  return startWizard(u,role);
+  const index=Number(a.slice("wizard:role:".length)),role=WIZARD_ROLES[index];
+  if(!role)return send(id,"Профессия не найдена.");
+  const selected=toggleProfileRole(u.filters?.wizardSelected||[],role);
+  const filters={...(u.filters||{}),wizardSelected:selected.selected};
+  await change(id,{filters});
+  if(selected.error)await send(id,"ℹ️ "+esc(selected.error));
+  return showWizardRolePage(id,Math.floor(index/8),selected.selected);
+ }
+ if(a==="wizard:roles_done"){
+  const selected=u.filters?.wizardSelected||[];
+  if(!selected.length)return send(id,"Выберите хотя бы одну профессию.",buttons([[["🪄 Выбрать","profile_wizard"]]]));
+  return startWizard(u,selected.join(", "));
  }
  if(a==="wizard:resume"){
   if(u.state!=="wizard")return send(id,"Откройте «Моя анкета», чтобы продолжить заполнение.");
   return promptWizard(u);
  }
- if(a==="wizard:cancel"){await change(id,{state:"",filters:discardProfileDraft(u.filters)});return send(id,"Изменения анкеты отменены. Ваш прежний профиль сохранён.",buttons([[["🏠 В меню","home"],["👤 Моя анкета","profile"]]]));}
+ if(a==="wizard:cancel"){const cleaned=discardProfileDraft(u.filters);delete cleaned.wizardSelected;await change(id,{state:"",filters:cleaned});return send(id,"Изменения анкеты отменены. Ваш прежний профиль сохранён.",buttons([[["🏠 В меню","home"],["👤 Моя анкета","profile"]]]));}
  if(a==="wizard:back"||a==="wizard:skip"){
   if(u.state!=="wizard")return send(id,"Мастер заполнения завершён. Откройте анкету заново.");
   const role=u.filters?.wizardRole,step=Number(u.filters?.wizardStep||0);
@@ -779,7 +795,7 @@ if(a==="template_model"||a==="template_client"){
  if(errors.length)return send(id,"Нужно исправить поля:\n• "+esc(errors.join("\n• ")));
  const pendingPhoto=u.filters.profileDraftPhoto;
  const photos=mergeProfilePhoto(u.photos,pendingPhoto);
- const savedFilters=discardProfileDraft(u.filters);
+ const savedFilters=discardProfileDraft(u.filters);delete savedFilters.wizardSelected;
  await change(id,{profile:draft,filters:savedFilters,state:"",photos,photo:photos[0]||u.photo||null});
  const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];
  if(fresh.photo){await profileBackfill(fresh);await backfill(fresh);
