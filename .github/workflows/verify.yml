@@ -1,0 +1,30 @@
+name: Verify bot
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.2.23"
+      - name: Compile Telegram server
+        run: bun build --target=bun bot.ts --outdir /tmp/world-models-check
+      - name: Test domain and privacy modules
+        run: bun test
+      - name: Verify no known secrets in source
+        shell: bash
+        run: |
+          if grep -RnE '^[[:space:]]*(BOT_TOKEN|DATABASE_URL|WEBHOOK_SECRET)[[:space:]]*[:=][[:space:]]*["\x27][[:digit:]]{6,}' --include='*.ts' .; then
+            echo "Potential embedded secret detected"
+            exit 1
+          fi
