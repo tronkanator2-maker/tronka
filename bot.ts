@@ -214,7 +214,7 @@ async function onCallback(c){await call("answerCallbackQuery",{callback_query_id
  return send(id,"📚 <b>Полезные статьи</b>\nВыберите тему:",{inline_keyboard:available.map(d=>[{text:d.title,url:base+"/documents/"+encodeURIComponent(d.slug)}])});
 }
 if(a==="invitefriend"){
- const name=(Bun.env.BOT_USERNAME||"world_mdbot").replace(/^@/,"");
+ const whoAmI=await call("getMe",{});const name=whoAmI.ok?whoAmI.result.username:(Bun.env.BOT_USERNAME||"").replace(/^@/,"");
  if(!name)return send(id,"Ссылка для приглашения пока недоступна.");
  const link="https://t.me/"+name+"?start=ref_"+id;
  const count=(await sql("SELECT COUNT(*)::int n FROM mm_referrals WHERE inviter=$1",id))[0].n;
