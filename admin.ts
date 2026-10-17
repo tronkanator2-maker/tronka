@@ -58,6 +58,7 @@ const appHtml = [
  '<div class="panel"><h2>Найденные источники, требующие проверки</h2><p>Подключайте источник только после проверки причин риска и законности объявлений.</p><form id="candidateForm"><input name="id" placeholder="ID найденного источника" required><select name="action"><option value="candidate_reject">Отклонить</option><option value="candidate_approve">Подключить после проверки</option></select><button>Применить</button></form><pre id="candidates"></pre></div>',
  '<div class="panel"><h2>Модерация</h2><form id="decision"><input name="id" placeholder="№ заявки" required><select name="action"><option value="approve">Одобрить</option><option value="reject">Отклонить</option></select><button>Применить</button></form><pre id="pending"></pre></div>',
  '<div class="panel"><h2>Обращения</h2><form id="ticketForm"><input name="id" placeholder="Номер обращения" required><textarea name="message" placeholder="Ответ пользователю от имени бота" rows="3" required></textarea><button>Ответить</button></form><form id="ticketStatus"><input name="id" placeholder="Номер обращения" required><select name="status"><option value="in_progress">В работе</option><option value="closed">Закрыто</option><option value="new">Новое</option></select><button>Изменить статус</button></form><pre id="reports"></pre></div>',
+ '<div class="panel"><h2>Тестовый доступ без платежа</h2><p>Срок доступа выставляется только вручную администратором. Банковских операций этот экран не совершает.</p><form id="accessForm"><input name="id" placeholder="Telegram ID" required><select name="days"><option value="30">30 дней</option><option value="90">90 дней</option><option value="180">180 дней</option></select><select name="action"><option value="access_grant">Предоставить доступ</option><option value="access_revoke">Отозвать доступ</option></select><button>Сохранить</button></form></div>',
  '<div class="panel"><h2>Пользователи</h2><form id="usersForm"><input name="id" placeholder="Telegram ID" required><select name="action"><option value="block">Заблокировать</option><option value="unblock">Разблокировать</option></select><button>Применить</button></form><pre id="users"></pre></div></section><p id="msg"></p>',
  '<script>',
  'const $=x=>document.getElementById(x);',
@@ -69,6 +70,7 @@ const appHtml = [
  '$("source").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:"source_add",id:f.get("id"),city:f.get("city"),topic:f.get("topic")});refresh()}catch(err){$("msg").textContent=err.message}};',
  '$("ticketForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:"ticket_reply",id:f.get("id"),message:f.get("message")});e.target.reset();refresh()}catch(err){$("msg").textContent=err.message}};',
  '$("ticketStatus").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:"ticket_status",id:f.get("id"),status:f.get("status")});refresh()}catch(err){$("msg").textContent=err.message}};',
+ '$("accessForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:f.get("action"),id:f.get("id"),days:f.get("days")});refresh()}catch(err){$("msg").textContent=err.message}};',
  'for(const formId of ["candidateForm","decision","usersForm"]){$(formId).onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:f.get("action"),id:f.get("id")});refresh()}catch(err){$("msg").textContent=err.message}}}',
  'document.querySelector("[data-op=refresh]").onclick=refresh;',
  'document.querySelector("[data-op=logout]").onclick=async()=>{await api("logout",{});refresh()};',
@@ -155,6 +157,16 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
    }
    await sql("UPDATE mm_candidate_sources SET status=$1,reason=$2,checked_at=NOW() WHERE id=$3",action==="candidate_approve"?"active":"rejected",action==="candidate_approve"?"Вручную проверено владельцем":"Отклонено владельцем",id);
    await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,$1,$2::jsonb)",action,JSON.stringify({target:id}));
+   return json({ok:true});
+ }
+ if(action==="access_grant"||action==="access_revoke"){
+   const days=Number(data.days||0);
+   if(action==="access_grant"&&![30,90,180].includes(days))return json({error:"Недопустимый срок"},400);
+   const updated=action==="access_revoke"
+    ?await sql("UPDATE mm_users SET access_until=NULL WHERE id=$1 RETURNING id",id)
+    :await sql("UPDATE mm_users SET access_until=GREATEST(COALESCE(access_until,NOW()),NOW())+make_interval(days=>$2::int) WHERE id=$1 RETURNING id",id,days);
+   if(!updated.length)return json({error:"Аккаунт не найден"},404);
+   await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,$1,$2::jsonb)",action,JSON.stringify({target:id,days:action==="access_grant"?days:0}));
    return json({ok:true});
  }
  if(action==="source_add")await sql("INSERT INTO mm_sources(id,city,topic,active) VALUES($1,$2,$3,TRUE) ON CONFLICT(id) DO UPDATE SET city=EXCLUDED.city,topic=EXCLUDED.topic,active=TRUE,mode='trial',disabled_reason=NULL,disabled_at=NULL",id,String(data.city||"").slice(0,90),String(data.topic||"").slice(0,90));
