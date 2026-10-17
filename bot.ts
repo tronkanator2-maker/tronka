@@ -519,12 +519,12 @@ async function onMessage(m){
    if(hasInviter.length)await sql("INSERT INTO mm_referrals(inviter,invitee) VALUES($1,$2) ON CONFLICT(invitee) DO NOTHING",inviter,id);
   }
  }
- if(/^job_\d+$/.test(payload)&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&u.phone&&allConsentsCurrent(u.consent,await currentDocumentHashes())){
+ if(/^job_\d+$/.test(payload)&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&(testMode()||u.phone)&&allConsentsCurrent(u.consent,await currentDocumentHashes())){
   const j=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",Number(payload.slice(4))))[0];
   if(j){await card(id,j);return begin(u)}
   await send(id,"Эта заявка больше не актуальна.");return begin(u);
  }
- if(/^profile_\d+$/.test(payload)&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&u.phone&&allConsentsCurrent(u.consent,await currentDocumentHashes())){
+ if(/^profile_\d+$/.test(payload)&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&(testMode()||u.phone)&&allConsentsCurrent(u.consent,await currentDocumentHashes())){
   const target=(await sql("SELECT * FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE AND photo IS NOT NULL",Number(payload.slice(8))))[0];
   if(target&&eligibleProfile(target.profile,target.photo)&&allConsentsCurrent(target.consent,await currentDocumentHashes())){await profile(id,target);return begin(u)}
   await send(id,"Эта анкета сейчас не участвует в поиске.");return begin(u);
@@ -832,7 +832,7 @@ if(a.startsWith("invite:")){
  const hashes=await currentDocumentHashes();
  if(!publicProfileAllowed(u,hashes,allConsentsCurrent,eligibleProfile))return send(id,"Чтобы отправлять приглашения, сначала завершите анкету и добавьте главное фото.");
  const p=(await sql("SELECT * FROM mm_users WHERE id=$1",target))[0];
- if(!publicProfileAllowed(p,hashes,allConsentsCurrent,eligibleProfile)||!p.username)return send(id,"Этот участник сейчас недоступен для приглашений.");
+ if(!publicProfileAllowed(p,hashes,allConsentsCurrent,eligibleProfile))return send(id,"Этот участник сейчас недоступен для приглашений.");
  const duplicate=(await sql("SELECT id FROM mm_invitations WHERE from_user=$1 AND to_user=$2 AND status IN ('sent','accepted') ORDER BY id DESC LIMIT 1",id,target))[0];
  if(duplicate)return send(id,"Вы уже отправляли приглашение этому участнику.");
  const count=await sql("SELECT COUNT(*)::int n FROM mm_invitations WHERE from_user=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());
