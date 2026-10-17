@@ -17,3 +17,24 @@ test("wizard validates a few structured fields without collecting phone numbers"
  expect(wizardAnswer({key:"рост"},"много").ok).toBe(false);
  expect(wizardFields("модель").some(f=>f.key==="телефон"||f.key==="паспорт")).toBe(false);
 });
+
+import {toggleProfileRole} from "../profile-wizard.ts";
+test("profession picker supports same-class multi-role selection",()=>{
+ expect(toggleProfileRole(["модель"],"актёр").selected).toEqual(["модель","актёр"]);
+ expect(toggleProfileRole(["модель","актёр"],"модель").selected).toEqual(["актёр"]);
+ expect(toggleProfileRole(["фотограф"],"визажист").selected).toEqual(["фотограф","визажист"]);
+});
+test("profession picker clears incompatible roles and explains why",()=>{
+ const model=toggleProfileRole(["фотограф","визажист"],"модель");
+ expect(model.selected).toEqual(["модель"]);
+ expect(model.error).toContain("не совмещаются");
+ const pro=toggleProfileRole(["модель","актёр"],"фотограф");
+ expect(pro.selected).toEqual(["фотограф"]);
+ expect(pro.error).toContain("не совмещаются");
+});
+test("required fields follow a group of mixed professional roles",()=>{
+ const model=wizardFields("модель, актёр");
+ expect(model.some(x=>x.key==="рост"&&x.required)).toBe(true);
+ const specialist=wizardFields("визажист, стилист по одежде");
+ expect(specialist.some(x=>x.key==="портфолио"&&x.required)).toBe(true);
+});
