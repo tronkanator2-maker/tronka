@@ -54,3 +54,11 @@ test("casting requirements filter incompatible gender and age",()=>{
 test("missing casting requirements do not reject profile",()=>{
  expect(matchesCastingRequirements({"пол":"женский"},{"кого ищу":"модель","требования":""})).toBe(true);
 });
+
+import {isExplicitAdultCasting} from "../engine.ts";
+test("erotic casting requires a separate 18+ opt-in",()=>{
+ expect(isExplicitAdultCasting("Фотосессия ню и топлес")).toBe(true);
+ expect(isExplicitAdultCasting("Реклама каталога детских купальников")).toBe(false);
+ expect(isExplicitAdultCasting("Съёмка в нижнем белье для взрослых, lingerie")).toBe(true);
+ expect(isExplicitAdultCasting("Спортивный мастер-класс на пляже")).toBe(false);
+});
