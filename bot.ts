@@ -499,9 +499,10 @@ async function onMessage(m){
  if(text.startsWith("/start")&&(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql)))){
   return send(m.from.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации документов и проверки интеграций. Пока можно посмотреть демонстрацию.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));
  }
- if(testMode()&&testReady()&&text.startsWith("/start")){
+ if(testMode()&&testReady()){
   const existing=(await sql("SELECT consent FROM mm_users WHERE id=$1",m.from.id))[0];
-  if(!canUseTestFeatures(Bun.env,existing?.consent))
+  const personalControl=!!existing&&/^\/(?:mydata|deleteaccount|support|cancel|help)(?:\s|$)/.test(text);
+  if(!canUseTestFeatures(Bun.env,existing?.consent)&&!personalControl)
    return send(m.from.id,testWarning,buttons([[["✅ Принять условия тестирования","test:agree"]],[["📄 Документы","docs"],["🎬 Демо","demo:home"]]]));
  }
  let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
