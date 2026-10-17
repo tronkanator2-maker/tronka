@@ -2,6 +2,15 @@
 // This module contains only presentation metadata and can be tested without Telegram.
 import {ROLES,ageAt} from "./engine.ts";
 export const WIZARD_ROLES=[...ROLES];
+export const isModelRole=role=>["модель","актёр"].includes(role);
+export function toggleProfileRole(selected,role){
+ const values=Array.isArray(selected)?selected.filter(x=>ROLES.includes(x)):[];
+ if(!ROLES.includes(role))return {selected:values,error:"Профессия не найдена."};
+ if(values.includes(role))return {selected:values.filter(x=>x!==role),error:null};
+ const excludes=isModelRole(role)?values.filter(x=>!isModelRole(x)):values.filter(isModelRole);
+ if(excludes.length)return {selected:[role],error:"Роли «модель» и «актёр» не совмещаются со специальностями съёмочной команды. Несовместимые роли сняты."};
+ return {selected:[...values,role],error:null};
+}
 const common=[
  {key:"имя",label:"Как к вам обращаться?",example:"Анна",required:true},
  {key:"дата рождения",label:"Дата рождения в формате ДД.ММ.ГГГГ",example:"12.09.2002",required:true},
@@ -24,8 +33,9 @@ const professional=[
  {key:"о себе",label:"О себе или о вашем проекте",example:"Снимаю каталоги, люблю уличный стиль",required:false}
 ];
 export const wizardFields=role=>{
- if(["модель","актёр"].includes(role))return [...common,...model];
- const needsPortfolio=/фотограф|видеограф|визажист|стилист|бьюти-мастер/.test(role);
+ const roles=String(role||"").split(",").map(x=>x.trim());
+ if(roles.some(isModelRole))return [...common,...model];
+ const needsPortfolio=roles.some(x=>/фотограф|видеограф|визажист|стилист|бьюти-мастер/.test(x));
  return [...common,...professional.map(field=>field.key==="портфолио"?{...field,required:needsPortfolio}:field)];
 };
 export const wizardField=(role,index)=>wizardFields(role)[index]||null;
