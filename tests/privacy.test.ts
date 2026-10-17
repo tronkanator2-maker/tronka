@@ -22,6 +22,8 @@ test("deletes dependent records before root account, never touches other users",
  expect(asText).toContain("mm_support_messages");
  expect(asText).toContain("mm_reviews");
  expect(asText).toContain("mm_trial_ledger");
+ expect(asText).toContain("mm_response_outbox");
+ expect(asText).toContain("mm_fanout_queue");
  expect(calls.at(-1).query).toContain("DELETE FROM mm_users WHERE id=$1");
  expect(calls.every(x=>x.args[0]===99)).toBe(true);
 });
