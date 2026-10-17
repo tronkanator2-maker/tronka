@@ -44,7 +44,11 @@ await prepareDocuments(sql);
 }
 let ready;function ensure(){return ready??=(setup().catch(e=>{ready=null;throw e}))}
 async function call(method,p){const r=await fetch("https://api.telegram.org/bot"+token+"/"+method,{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(p,(_,v)=>typeof v==="bigint"?Number(v):v)});const j=await r.json();if(!j.ok)console.error("Telegram",method,j.description);return j}
-const send=(id,text,markup)=>call("sendMessage",{chat_id:id,text,parse_mode:"HTML",disable_web_page_preview:true,...markup?{reply_markup:markup}:{}});
+const send=async(id,text,markup)=>{
+ const result=await call("sendMessage",{chat_id:id,text,parse_mode:"HTML",disable_web_page_preview:true,...markup?{reply_markup:markup}:{}});
+ if(!result.ok && (result.error_code===429||result.error_code>=500))throw Error("Telegram delivery temporarily unavailable");
+ return result;
+};
 const buttons=rows=>({inline_keyboard:rows.map(row=>row.map(([text,callback_data])=>({text,callback_data})))});
 async function change(id,fields){let sets=[],vals=[];for(const [k,v] of Object.entries(fields)){vals.push(typeof v==="object"?JSON.stringify(v):v);sets.push(k+"=$"+vals.length+(typeof v==="object"?"::jsonb":""));}vals.push(id);await sql("UPDATE mm_users SET "+sets.join(",")+" WHERE id=$"+vals.length,...vals)}
 async function who(f){await sql("INSERT INTO mm_users(id,username,first_name) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name",f.id,f.username||null,f.first_name||"");return(await sql("SELECT * FROM mm_users WHERE id=$1",f.id))[0]}
@@ -81,7 +85,7 @@ function validJob(p){
  return [...new Set(missing)];
 }
 async function profile(to,u,heading="Анкета"){if(!u.profile||!Object.keys(u.profile).length)return;const reviews=await feedbackSummary(u.id,sql); if((u.photos||[]).length>1)await call("sendMediaGroup",{chat_id:to,media:u.photos.slice(0,5).map(x=>({type:"photo",media:x}))});else if(u.photo)await call("sendPhoto",{chat_id:to,photo:u.photo});return send(to,"<b>"+esc(heading)+"</b>\n"+Object.entries(u.profile).filter(([k])=>!/дата рождения|телефон|telegram|instagram|фио/i.test(k)).map(([k,v])=>esc(k)+": "+esc(sourcePublicText(v))).join("\n")+"\nКонтакты скрыты.\n\n"+reviews.text,buttons([[["✉️ Пригласить","invite:"+u.id]],...(reviews.count?[[["⭐ Все отзывы ("+reviews.count+")","allreviews:"+u.id+":0"]]]:[]),[["⚠️ Пожаловаться","reportuser:"+u.id]]]))}
-async function card(to,j){let p=j.body;let lines=["<b>📢 "+esc(get(p,"название заявки"))+"</b>","Кого ищу: "+esc(get(p,"кого ищу")),"Тип работы: "+esc(get(p,"тип работы")),"Город: "+esc(get(p,"город")),"Требования: "+esc(get(p,"требования")||"не указано"),"Оплата: "+esc(get(p,"формат и оплата")),"Дата: "+esc(get(p,"дата съёмки")||"не указана"),"",esc(sourcePublicText(get(p,"описание")))];await send(to,lines.join("\n"),buttons([[["✋ Откликнуться","reply:"+j.id],["⚠️ Пожаловаться","reportjob:"+j.id]]]))}
+async function card(to,j){let p=j.body;let lines=["<b>📢 "+esc(get(p,"название заявки"))+"</b>","Кого ищу: "+esc(get(p,"кого ищу")),"Тип работы: "+esc(get(p,"тип работы")),"Город: "+esc(get(p,"город")),"Требования: "+esc(get(p,"требования")||"не указано"),"Оплата: "+esc(get(p,"формат и оплата")),"Дата: "+esc(get(p,"дата съёмки")||"не указана"),"",esc(sourcePublicText(get(p,"описание")))];return send(to,lines.join("\n"),buttons([[["✋ Откликнуться","reply:"+j.id]],[["⚠️ Пожаловаться","reportjob:"+j.id]]]))}
 async function matches(u,j){
  if(!u||u.blocked||u.suspended||!u.active||!u.photo||!Object.keys(u.profile||{}).length||j.paused||j.status!=="active")return false;
  const p=u.profile;
@@ -98,7 +102,14 @@ async function deliverTo(u,j){
  if(prev.some(p=>similarity(get(p.body,"описание"),get(j.body,"описание"))>=.95))return false;
  const inserted=await sql("INSERT INTO mm_deliveries(user_id,job_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING job_id",u.id,j.id);
  if(!inserted.length)return false;
- await card(u.id,j);await safetyOnce(u);return true;
+ try {
+ const sent=await card(u.id,j);
+ if(!sent?.ok){await sql("DELETE FROM mm_deliveries WHERE user_id=$1 AND job_id=$2",u.id,j.id);return false}
+ await safetyOnce(u);return true;
+} catch(e){
+ await sql("DELETE FROM mm_deliveries WHERE user_id=$1 AND job_id=$2",u.id,j.id);
+ throw e;
+}
 }
 async function safetyOnce(u){
  const r=await sql("UPDATE mm_users SET first_safety_sent_at=NOW() WHERE id=$1 AND first_safety_sent_at IS NULL RETURNING id",u.id);
@@ -113,9 +124,13 @@ async function sendMatchedProfile(job,p){
  if(city&&get(p.profile,"город")&&!get(p.profile,"город").toLowerCase().split(",").some(x=>city.includes(x.trim())))return false;
  const inserted=await sql("INSERT INTO mm_profile_deliveries(job_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING user_id",job.id,p.id);
  if(!inserted.length)return false;
- await send(job.owner,"Анкета по вашей заявке №"+job.id+" · "+esc(get(job.body,"название заявки")));
- await profile(job.owner,p,"Анкета подходящего участника");
+ try {
+ const notice=await send(job.owner,"Анкета по вашей заявке №"+job.id+" · "+esc(get(job.body,"название заявки")));
+ if(!notice?.ok)throw Error("Profile notice not sent");
+ const shown=await profile(job.owner,p,"Анкета подходящего участника");
+ if(!shown?.ok)throw Error("Profile card not sent");
  return true;
+ }catch(e){await sql("DELETE FROM mm_profile_deliveries WHERE job_id=$1 AND user_id=$2",job.id,p.id);throw e}
 }
 async function matchingProfilesForJob(job){
  if(job.owner===0)return;
@@ -298,6 +313,13 @@ Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){awa
  if(!sent.ok)throw Error("Telegram не доставил ответ.");
  await sql("INSERT INTO mm_support_messages(ticket_id,sender,body) VALUES($1,'support',$2)",id,message);
  await sql("UPDATE mm_reports_v2 SET status='in_progress',updated_at=NOW() WHERE id=$1",id);
-});if(dashboard)return dashboard;let u=new URL(r.url);if(u.pathname==="/health"){try{await ensure();return Response.json({ok:true,registration:Bun.env.REGISTRATION_ENABLED==="true"})}catch(e){return new Response("Database unavailable",{status:503})}}if(u.pathname==="/webhook"&&r.method==="POST"){if(!secret||r.headers.get("x-telegram-bot-api-secret-token")!==secret)return new Response("Forbidden",{status:403});try{await ensure();let x=await r.json();let ok=await sql("INSERT INTO mm_updates(id) VALUES($1) ON CONFLICT DO NOTHING RETURNING id",x.update_id);if(ok.length){if(x.message?.from||x.message?.chat?.type!=="private")if(x.message)await onMessage(x.message);if(x.channel_post)await onSourcePost(x.channel_post);if(x.callback_query?.from)await onCallback(x.callback_query)}return new Response("ok")}catch(e){console.error("Update error",e);return new Response("error",{status:500})}}return new Response("World Models Bot")}})
+});if(dashboard)return dashboard;let u=new URL(r.url);if(u.pathname==="/health"){try{await ensure();return Response.json({ok:true,registration:Bun.env.REGISTRATION_ENABLED==="true"})}catch(e){return new Response("Database unavailable",{status:503})}}if(u.pathname==="/webhook"&&r.method==="POST"){if(!secret||r.headers.get("x-telegram-bot-api-secret-token")!==secret)return new Response("Forbidden",{status:403});try{await ensure();let x=await r.json();let ok=await sql("INSERT INTO mm_updates(id) VALUES($1) ON CONFLICT DO NOTHING RETURNING id",x.update_id);if(ok.length){
+  try {
+    if(x.message?.from||x.message?.chat?.type!=="private")if(x.message)await onMessage(x.message);
+    if(x.channel_post)await onSourcePost(x.channel_post);
+    if(x.callback_query?.from)await onCallback(x.callback_query);
+  }catch(e){await sql("DELETE FROM mm_updates WHERE id=$1",x.update_id);throw e}
+ }
+ return new Response("ok")}catch(e){console.error("Update error",e);return new Response("error",{status:500})}}return new Response("World Models Bot")}})
 setInterval(()=>ensure().then(()=>feedbackTick(sql,send)).catch(e=>console.error("feedback job",String(e))),60*60*1000);
 if(token&&secret&&Bun.env.PUBLIC_URL)call("setWebhook",{url:Bun.env.PUBLIC_URL.replace(/\/$/,"")+"/webhook",secret_token:secret,allowed_updates:["message","channel_post","callback_query"]}).then(r=>console.log("Webhook configured",r.ok)).catch(console.error);
