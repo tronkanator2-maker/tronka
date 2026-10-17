@@ -7,7 +7,7 @@ import {parseWithModel} from "./ai-parser.ts";
 import {prepareDocuments,legalReady,recordConsent,publicDocumentRoute,latestDocuments,documentHashes,allConsentsCurrent,consentIsCurrent} from "./documents.ts";
 import {prepareEntitlements,startPhoneTrial,hasPaidAccess,weekStartMoscow} from "./access.ts";
 import {setupFeedback, scheduleFeedback, feedbackTick, feedbackCallback, feedbackText, feedbackSummary} from "./feedback.ts";
-import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity, eligibleProfile, matchesCastingRequirements, isExplicitAdultCasting} from "./engine.ts";
+import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity, eligibleProfile, matchesCastingRequirements, isExplicitAdultCasting,matchesWantedProfileRoles} from "./engine.ts";
 const db=new SQL(Bun.env.DATABASE_URL||"postgres://unconfigured");
 const token=Bun.env.BOT_TOKEN||"", secret=Bun.env.WEBHOOK_SECRET||"";
 const admin=(Bun.env.ADMIN_IDS||"").split(",");
@@ -186,6 +186,8 @@ async function sendMatchedProfile(job,p){
  if(job.owner===p.id||job.owner===0||job.paused||job.status!=="active")return false;
  if(!p.active||p.blocked||p.suspended||!allConsentsCurrent(p.consent,await currentDocumentHashes())||!eligibleProfile(p.profile,p.photo))return false;
  if(!roleMatch(get(job.body,"кого ищу"),get(p.profile,"кто вы")))return false;
+ const owner=(await sql("SELECT filters FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE",job.owner))[0];
+ if(!owner||!matchesWantedProfileRoles(owner.filters?.profileRoles||[],get(p.profile,"кто вы")))return false;
  if(isExplicitAdultCasting([get(job.body,"описание"),get(job.body,"требования"),get(job.body,"тип работы")].join(" ")) && !(p.filters?.adult===true && ageAt(get(p.profile,"дата рождения"))>=18))return false;
  if(!matchesCastingRequirements(p.profile,job.body))return false;
  if(!payMatches(p.profile,job.body))return false;
@@ -220,12 +222,12 @@ async function matchingJobs(u,limit=50){
 
 async function browseProfiles(u,offset=0){
  if(!allConsentsCurrent(u.consent,await currentDocumentHashes()))return begin(u);
- const requested=u.filters?.profileRole||"";
+ const requested=u.filters?.profileRoles|| (u.filters?.profileRole?[u.filters.profileRole]:[]);
  const city=(u.filters?.profileCity||u.filters?.city||"").trim().toLowerCase();
  const profiles=await sql("SELECT * FROM mm_users WHERE id<>$1 AND blocked=FALSE AND suspended=FALSE AND active=TRUE AND photo IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 300",u.id);
  const publicProfiles=profiles.filter(p=>{
   if(!allConsentsCurrent(p.consent,cachedDocHashes)||!eligibleProfile(p.profile,p.photo))return false;
-  if(requested&&!get(p.profile,"кто вы").split(",").map(x=>x.trim().toLowerCase()).includes(requested))return false;
+  if(!matchesWantedProfileRoles(requested,get(p.profile,"кто вы")))return false;
   if(city&&!city.split(",").some(c=>get(p.profile,"город").toLowerCase().includes(c.trim())))return false;
   return true;
  });
@@ -241,12 +243,14 @@ async function browseProfiles(u,offset=0){
  rows.push([["⚙️ Профессия","browse_roles"],["🏙 Город","browse_city"]]);
  rows.push([["🏠 В меню","home"]]);
  await send(u.id,"🔎 <b>Каталог анкет</b> • показаны "+page.length+" из "+publicProfiles.length+
-  "\\nГород: "+esc(city||"все")+" · Профессия: "+esc(requested||"все"),buttons(rows));
+  "\\nГород: "+esc(city||"все")+" · Профессия: "+esc(requested.join(", ")||"все"),buttons(rows));
 }
 async function chooseBrowseRole(u){
  const rows=[[["Все направления","browse_role:all"]]];
- for(let i=0;i<ROLES.length;i+=2)rows.push(ROLES.slice(i,i+2).map((role,n)=>[(u.filters?.profileRole===role?"✅ ":"")+role,"browse_role:"+(i+n)]));
- return send(u.id,"Выберите нужную профессию:",buttons(rows));
+ const chosen=u.filters?.profileRoles|| (u.filters?.profileRole?[u.filters.profileRole]:[]);
+ for(let i=0;i<ROLES.length;i+=2)rows.push(ROLES.slice(i,i+2).map((role,n)=>[(chosen.includes(role)?"✅ ":"☐ ")+role,"browse_role:"+(i+n)]));
+ rows.push([["✅ Готово","browse:0"]]);
+ return send(u.id,"Выберите одну или несколько профессий. Настройка действует и на каталог, и на присылаемые анкеты:",buttons(rows));
 }
 
 async function showFilterMenu(u){
@@ -356,8 +360,10 @@ if(a==="template_model"||a==="template_client"){await change(id,{state:"profile"
   const key=a.slice("browse_role:".length);
   const role=key==="all"?"":ROLES[Number(key)];
   if(role===undefined)return;
-  const filters={...(u.filters||{}),profileRole:role};
-  await change(id,{filters});return browseProfiles({...u,filters},0);
+  const chosen=[...(u.filters?.profileRoles|| (u.filters?.profileRole?[u.filters.profileRole]:[]))];
+  const next=key==="all"?[]:chosen.includes(role)?chosen.filter(x=>x!==role):[...chosen,role];
+  const filters={...(u.filters||{}),profileRoles:next,profileRole:""};
+  await change(id,{filters});return chooseBrowseRole({...u,filters});
  }
  if(a==="browse_roles")return chooseBrowseRole(u);
  if(a==="browse_city"){await change(id,{state:"browse_city"});return send(id,"Напишите город для каталога, например «Москва». Для сброса отправьте «все».");}
