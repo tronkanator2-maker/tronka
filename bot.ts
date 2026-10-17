@@ -107,7 +107,8 @@ async function begin(u){
  if(!testReady()||!(await legalReady(sql)))return send(u.id,"«Мир моделей» готовится к запуску. Пока доступно демо.",buttons([[["🎬 Демо","demo:home"]],[["📄 Документы","docs"]]]));
  if(testMode()){
   if(!canUseTestFeatures(Bun.env,u.consent))return send(u.id,testWarning,buttons([[["✅ Принять условия тестирования","test:agree"]],[["📄 Документы (пока не утверждены)","docs"]],[["🎬 Посмотреть демо","demo:home"]]]));
-  return send(u.id,testMenuText,menu);
+  const resume=u.state==="wizard"?[[{text:"▶️ Продолжить анкету",callback_data:"wizard:resume"},{text:"❌ Отменить",callback_data:"wizard:cancel"}]]:u.state==="profile_confirm"?[[{text:"✅ Сохранить черновик",callback_data:"profile_save"},{text:"✏️ Исправить",callback_data:"edit_profile"}]]:u.filters?.profileDraft?[[{text:"📝 Вернуться к черновику",callback_data:"edit_profile"},{text:"❌ Отменить",callback_data:"wizard:cancel"}]]:[];
+  return send(u.id,testMenuText+(resume.length?"\n\n📝 У вас есть незавершённая анкета.":""),{inline_keyboard:[...resume,...menu.inline_keyboard]});
  }
  const hashes=await currentDocumentHashes();
  if(!fullConsentsCurrent(u.consent,hashes))return send(u.id,"<b>Добро пожаловать в Мир моделей!</b>\nОзнакомьтесь с документами и дайте три отдельных согласия.",consentBoard(u,hashes));
@@ -671,6 +672,10 @@ if(a==="docs")return send(id,"Все опубликованные докумен
  if(a.startsWith("wizard:role:")){
   const role=WIZARD_ROLES[Number(a.slice("wizard:role:".length))];
   return startWizard(u,role);
+ }
+ if(a==="wizard:resume"){
+  if(u.state!=="wizard")return send(id,"Откройте «Моя анкета», чтобы продолжить заполнение.");
+  return promptWizard(u);
  }
  if(a==="wizard:cancel"){await change(id,{state:"",filters:discardProfileDraft(u.filters)});return send(id,"Изменения анкеты отменены. Ваш прежний профиль сохранён.",buttons([[["🏠 В меню","home"],["👤 Моя анкета","profile"]]]));}
  if(a==="wizard:back"||a==="wizard:skip"){
