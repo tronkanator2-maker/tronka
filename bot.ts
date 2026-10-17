@@ -1,4 +1,5 @@
 import {SQL} from "bun";
+import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
 import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
 import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer} from "./profile-wizard.ts";
 import {isTestMode,canRegister,canUseTestFeatures,testWarning,testMenuText} from "./test-mode.ts";
@@ -75,6 +76,7 @@ await sql("CREATE INDEX IF NOT EXISTS mm_support_message_ticket ON mm_support_me
 
 await setupFeedback(sql);
 await prepareEntitlements(sql);
+await prepareRelay(sql);
 await prepareDocuments(sql);
 await setupSourceHealth(sql);
 
@@ -541,7 +543,20 @@ if(m.photo?.length&&u.state==="photo"){
  if(photos.length>=5){await send(id,"Все пять фотографий сохранены ✅");const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await backfill(fresh);await profileBackfill(fresh);return begin(fresh)}
  return;
 }
-if(u.state==="wizard"){if(m.photo?.length)return send(id,"Для фото будет отдельный шаг после заполнения анкеты. Сейчас отправьте ответ текстом.");return acceptWizardText(u,t)}
+if(u.state==="relay"){
+  const peerId=Number(u.filters?.relayPeer);
+  if(!await relayAuthorized(sql,id,peerId))return send(id,"Переписка недоступна: нет подтверждённого сотрудничества или доступ отозван.");
+  const peer=(await sql("SELECT * FROM mm_users WHERE id=$1",peerId))[0];
+  if(!peer||peer.blocked||peer.suspended||!allConsentsCurrent(peer.consent,await currentDocumentHashes()))return send(id,"Сейчас написать этому участнику невозможно.");
+  if(!t.trim()||t.length>1500)return send(id,"Отправьте текстовое сообщение до 1500 символов. Выйти из переписки: /cancel");
+  if(!await consumeRelayQuota(sql,id))return send(id,"На этот час лимит в 20 сообщений исчерпан. Попробуйте позже.");
+  const delivered=await send(peerId,"💬 <b>Сообщение участника, с которым вы сотрудничаете</b>\n\n"+esc(t),buttons([
+    [["↩️ Ответить","relay:"+id],["⚠️ Пожаловаться","reportuser:"+id]]
+  ]));
+  if(!delivered?.ok)return send(id,"Telegram не доставил сообщение. Возможно, собеседник заблокировал бота.");
+  return send(id,"✅ Сообщение передано. Можете написать ещё или выйти: /cancel");
+ }
+ if(u.state==="wizard"){if(m.photo?.length)return send(id,"Для фото будет отдельный шаг после заполнения анкеты. Сейчас отправьте ответ текстом.");return acceptWizardText(u,t)}
  if(u.state==="reply_compose"){if(!t.trim())return send(id,"Отклик должен быть текстовым сообщением. Для отмены — /cancel.");return submitResponse(u,t)}
  if(u.state==="support"){if(m.photo?.length)return saveReport(u,m.caption||"Фото-доказательство",m.photo.at(-1).file_id);return saveReport(u,t)}
 if(u.state==="profile"){
@@ -665,6 +680,14 @@ if(a==="docs")return send(id,"Все опубликованные докумен
   await change(id,{filters});
   const next={...u,filters};
   return wizardCompleted(role,filters.wizardStep)?finishWizard(next):promptWizard(next);
+ }
+ if(a.startsWith("relay:")){
+  const peerId=Number(a.slice("relay:".length));
+  if(!await relayAuthorized(sql,id,peerId))return send(id,"Переписка разрешена только после принятого приглашения или отклика.");
+  const peer=(await sql("SELECT * FROM mm_users WHERE id=$1",peerId))[0];
+  if(!peer||peer.blocked||peer.suspended||!allConsentsCurrent(peer.consent,await currentDocumentHashes()))return send(id,"Участник сейчас недоступен.");
+  await change(id,{state:"relay",filters:{...(u.filters||{}),relayPeer:peerId}});
+  return send(id,"💬 <b>Переписка через бота</b>\nНапишите собеседнику текст. Он получит сообщение с кнопкой «Ответить».\nЛимит: 20 сообщений в час.\nВыйти: /cancel.");
  }
  if(a==="edit_profile"){
  const draft=profileDraftOf(u);
@@ -997,6 +1020,7 @@ setInterval(()=>consumeCollectorInbox().catch(e=>console.error("collector inbox"
 setInterval(()=>ensure().then(()=>reviewSourceHealth(sql)).catch(e=>console.error("source health",String(e))),24*60*60*1000);
 setInterval(()=>ensure().then(async()=>{
  await sql("DELETE FROM mm_updates WHERE created_at<NOW()-INTERVAL '30 days'");
+ await sql("DELETE FROM mm_relay_usage WHERE hour_bucket<NOW()-INTERVAL '72 hours'");
  await sql("DELETE FROM mm_fanout_queue WHERE pending=FALSE AND completed_at<NOW()-INTERVAL '90 days'");
  }).catch(e=>console.error("maintenance",String(e))),24*60*60*1000);
 setTimeout(()=>runFanoutBatch().catch(e=>console.error("fanout startup",String(e))),4000);
