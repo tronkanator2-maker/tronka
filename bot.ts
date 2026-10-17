@@ -166,7 +166,7 @@ async function profile(to,u,heading="Анкета"){
    publicProfileEntries(u.profile).map(([k,v])=>esc(k)+": "+esc(v)).join("\n")+
    "\nКонтакты скрыты до принятого приглашения или отклика.\n\n"+reviews.text;
  const own=Number(to)===Number(u.id);
- const rows=own?[[["✏️ Изменить","edit_profile"],["📷 Мои фото","addphoto"]]]:
+ const rows=own?[[["✏️ Изменить","edit_profile"],["🖼 Управление фото","photos"]]]:
   [[["✉️ Пригласить","invite:"+u.id]],...(reviews.count?[[["⭐ Все отзывы ("+reviews.count+")","allreviews:"+u.id+":0"]]]:[]),[["⚠️ Пожаловаться","reportuser:"+u.id]]];
  return send(to,content,buttons(rows));
 }
@@ -786,6 +786,39 @@ if(a==="template_model"||a==="template_client"){
   return send(id,"✅ Анкета сохранена! Фото есть, профиль готов к подбору.",buttons([[["👤 Моя анкета","profile"],["🏠 В меню","home"]]]));
  }
  return send(id,"✅ Анкета сохранена. Чтобы участвовать в подборе, добавьте главное фото.",buttons([[["📷 Добавить фото","addphoto"],["🏠 Позже","home"]]]));
+}
+if(a==="photos"){
+ const photos=Array.isArray(u.photos)?u.photos:[],rows=[];
+ if(!photos.length)return send(id,"В анкете пока нет фото. Загрузите хотя бы одно.",buttons([[["📷 Добавить фото","addphoto"],["🏠 В меню","home"]]]));
+ const media=photos.map(file=>({type:"photo",media:file}));
+ try{
+  if(media.length>1)await call("sendMediaGroup",{chat_id:id,media});
+  else await call("sendPhoto",{chat_id:id,photo:photos[0]});
+ }catch(err){console.error("Profile media preview",String(err))}
+ for(let i=0;i<photos.length;i++){
+  const fingerprint=Bun.hash(photos[i]).toString(36);
+  const actions=[];
+  if(i!==0)actions.push(["⭐ Фото "+(i+1)+" главным","photo_main:"+i+":"+fingerprint]);
+  actions.push(["🗑 Убрать "+(i+1),"photo_remove:"+i+":"+fingerprint]);
+  rows.push(actions);
+ }
+ if(photos.length<5)rows.push([["➕ Добавить фото","addphoto"]]);
+ rows.push([["👤 К анкете","profile"],["🏠 В меню","home"]]);
+ return send(id,"🖼 <b>Ваши фотографии</b>\nВсего: "+photos.length+" из 5.\nПервое фото — главное. Можно выбрать другое или удалить ненужные.",buttons(rows));
+}
+if(a.startsWith("photo_main:")||a.startsWith("photo_remove:")){
+ const parts=a.split(":"),operation=parts[0],index=Number(parts[1]),fingerprint=parts[2];
+ const photos=Array.isArray(u.photos)?u.photos:[];
+ if(!Number.isInteger(index)||index<0||index>=photos.length||Bun.hash(photos[index]).toString(36)!==fingerprint)
+  return send(id,"Список фотографий изменился. Откройте актуальное управление фото.",buttons([[["🖼 Мои фото","photos"]]]));
+ if(operation==="photo_remove"){
+  const updated=photos.filter((_,i)=>i!==index);
+  await change(id,{photos:updated,photo:updated[0]||null});
+  return send(id,updated.length?"🗑 Фото удалено из анкеты. Осталось: "+updated.length+".":"Фото удалено. Без главного фото анкета не участвует в подборе.",buttons([[["🖼 Управление фото","photos"],["📷 Добавить","addphoto"]]]));
+ }
+ const updated=[photos[index],...photos.filter((_,i)=>i!==index)];
+ await change(id,{photos:updated,photo:updated[0]});
+ return send(id,"⭐ Главное фото изменено.",buttons([[["🖼 Управление фото","photos"],["👤 Моя анкета","profile"]]]));
 }
 if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправьте 1–5 фотографий: по одной или альбомом. Первая станет ключевой.",buttons([[["✅ Готово","photo_done"]]]))}if(a==="photo_done"){
  await change(id,{state:""});
