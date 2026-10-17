@@ -824,10 +824,19 @@ if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправ
   const current={...u,filters};
   return jobWizardFinished(filters.jobWizardStep)?finishJobWizard(current):jobWizardPrompt(current);
  }if(a==="publish"){let p=u.filters?.draft;if(u.state!=="job_confirm"||!p)return send(id,"Сначала проверьте и подтвердите актуальную версию заявки.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].total)return send(id,"Без подписки можно разместить одну новую заявку с понедельника по воскресенье.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const row=(await sql("INSERT INTO mm_jobs(owner,body,expires_at) VALUES($1,$2::jsonb,$3) RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString()))[0];await change(id,{state:"",filters:Object.fromEntries(Object.entries(u.filters).filter(([k])=>k!=="draft"))});await send(id,"Заявка №"+row.id+" опубликована.");await dispatch(row);return}if(a==="jobs"){
- const js=await matchingJobs(u,30);
- if(!js.length)return send(id,eligibleProfile(u.profile,u.photo)?"По вашим фильтрам подходящих заявок сейчас нет.":"Добавьте ключевое фото и заполните обязательные поля анкеты, чтобы запустить подбор.",buttons([[["🎯 Фильтры","filters"],["👤 Анкета","profile"]]]));
+ const hasProfile=eligibleProfile(u.profile,u.photo);
+ let js;
+ if(hasProfile){
+  js=await matchingJobs(u,30);
+ }else{
+  // Read-only previews: never auto-send or expose the external source contact.
+  const recent=await sql("SELECT * FROM mm_jobs WHERE status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' AND owner<>$1 ORDER BY created_at DESC LIMIT 40",id);
+  js=recent.filter(job=>!isExplicitAdultCasting([get(job.body,"описание"),get(job.body,"требования"),get(job.body,"тип работы")].join(" "))).slice(0,5);
+ }
+ if(!js.length)return send(id,hasProfile?"Подходящих заявок по выбранным фильтрам пока нет.":"Пока нет открытых заявок для предпросмотра. Можно создать свою тестовую заявку.",buttons([[["🎯 Фильтры","filters"],["➕ Создать заявку","new"]],[["🏠 В меню","home"]]]));
+ if(!hasProfile)await send(id,"🔎 <b>Предпросмотр открытых заявок</b>\nМожно посмотреть условия без фото и анкеты. Чтобы откликнуться, сначала создайте профиль и добавьте главное фото.");
  for(const j of js)await card(id,j);
- if(js.length<=3)await send(id,"По вашим настройкам сейчас всего "+js.length+" подходящих заявок.");
+ if(hasProfile&&js.length<=3)await send(id,"По вашим настройкам сейчас "+js.length+" подходящих заявок.");
  return;
 }if(a==="mine"){let js=await sql("SELECT * FROM mm_jobs WHERE owner=$1 ORDER BY id DESC LIMIT 20",id);if(!js.length)return send(id,"Ваших заявок пока нет.");for(let j of js)await send(id,"№"+j.id+" — "+esc(get(j.body,"название заявки"))+" ("+(j.paused?"поиск остановлен":esc(j.status))+")",buttons([[[j.paused?"▶️ Восстановить":"⏸️ Остановить","jobpause:"+j.id],["✏️ Изменить","jobedit:"+j.id],["Закрыть","close:"+j.id]]]));return}if(a.startsWith("jobedit:")){
  const jobId=Number(a.slice("jobedit:".length));
