@@ -159,3 +159,22 @@ export function eligibleProfile(profile,hasKeyPhoto){
  if(roles.some(x=>/фотограф|видеограф|визажист|стилист|бьюти-мастер/.test(x)))return !!field(p,"портфолио");
  return true;
 }
+
+
+export function matchesCastingRequirements(profile,job){
+ const roles=field(job,"кого ищу").toLowerCase();
+ if(!/(модел|актёр|актер)/.test(roles))return true;
+ const requirements=field(job,"требования").toLowerCase();
+ if(!requirements)return true;
+ const female=/(?:женщин|девушк|женск)/.test(requirements);
+ const male=/(?:мужчин|мужск|парень|юнош)/.test(requirements);
+ const gender=field(profile,"пол").toLowerCase();
+ if(female&&!male&&!/женск|женщин/.test(gender))return false;
+ if(male&&!female&&!/мужск|мужчин/.test(gender))return false;
+ const range=requirements.match(/(?:^|\s)(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*(?:лет|года|год)\b/);
+ if(range){
+  const min=Number(range[1]),max=Number(range[2]),n=ageAt(field(profile,"дата рождения"));
+  if(min>=1&&max>=min&&max<=100&&n!==null&&(n<min||n>max))return false;
+ }
+ return true;
+}
