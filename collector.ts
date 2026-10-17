@@ -1,8 +1,8 @@
 import {SQL} from "bun";
-import {Api,TelegramClient} from "telegram";
-import {StringSession} from "telegram/sessions";
-import {NewMessage} from "telegram/events";
-import {parseSourcePost,moderate,normalizePost,extractContact,ageAt,isExplicitAdultCasting,inferCity} from "./engine.ts";
+import {Api,TelegramClient} from "teleproto";
+import {StringSession} from "teleproto/sessions";
+import {NewMessage} from "teleproto/events";
+import {parseSourcePost,moderate,normalizePost,extractContact,isExplicitAdultCasting,inferCity} from "./engine.ts";
 
 // Isolated optional MTProto collector. Runs only with a user-authorized session,
 // observes chats this user may access, and never tries to bypass private invite links.
