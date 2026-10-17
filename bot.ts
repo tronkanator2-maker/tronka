@@ -3,7 +3,7 @@ import {adminApp} from "./admin.ts";
 import {prepareDocuments,legalReady,recordConsent,publicDocumentRoute} from "./documents.ts";
 import {prepareEntitlements,startPhoneTrial,hasPaidAccess,weekStartMoscow} from "./access.ts";
 import {setupFeedback, scheduleFeedback, feedbackTick, feedbackCallback, feedbackText, feedbackSummary} from "./feedback.ts";
-import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity} from "./engine.ts";
+import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity, eligibleProfile} from "./engine.ts";
 const db=new SQL(Bun.env.DATABASE_URL||"postgres://unconfigured");
 const token=Bun.env.BOT_TOKEN||"", secret=Bun.env.WEBHOOK_SECRET||"";
 const admin=(Bun.env.ADMIN_IDS||"").split(",");
@@ -91,9 +91,9 @@ function validJob(p){
 async function profile(to,u,heading="Анкета"){if(!u.profile||!Object.keys(u.profile).length)return;const reviews=await feedbackSummary(u.id,sql); if((u.photos||[]).length>1)await call("sendMediaGroup",{chat_id:to,media:u.photos.slice(0,5).map(x=>({type:"photo",media:x}))});else if(u.photo)await call("sendPhoto",{chat_id:to,photo:u.photo});return send(to,"<b>"+esc(heading)+"</b>\n"+Object.entries(u.profile).filter(([k])=>!/дата рождения|телефон|telegram|instagram|фио/i.test(k)).map(([k,v])=>esc(k)+": "+esc(sourcePublicText(v))).join("\n")+"\nКонтакты скрыты.\n\n"+reviews.text,buttons([[["✉️ Пригласить","invite:"+u.id]],...(reviews.count?[[["⭐ Все отзывы ("+reviews.count+")","allreviews:"+u.id+":0"]]]:[]),[["⚠️ Пожаловаться","reportuser:"+u.id]]]))}
 async function card(to,j){let p=j.body;let lines=["<b>📢 "+esc(get(p,"название заявки"))+"</b>","Кого ищу: "+esc(get(p,"кого ищу")),"Тип работы: "+esc(get(p,"тип работы")),"Город: "+esc(get(p,"город")),"Требования: "+esc(get(p,"требования")||"не указано"),"Оплата: "+esc(get(p,"формат и оплата")),"Дата: "+esc(get(p,"дата съёмки")||"не указана"),"",esc(sourcePublicText(get(p,"описание")))];return send(to,lines.join("\n"),buttons([[["✋ Откликнуться","reply:"+j.id]],[["⚠️ Пожаловаться","reportjob:"+j.id]]]))}
 async function matches(u,j){
- if(!u||u.blocked||u.suspended||!u.active||!u.photo||!Object.keys(u.profile||{}).length||j.paused||j.status!=="active")return false;
+ if(!u||u.blocked||u.suspended||!u.active||!eligibleProfile(u.profile,u.photo)||j.paused||j.status!=="active")return false;
  const p=u.profile;
- if(MODEL_ROLES.some(r=>get(p,"кто вы").toLowerCase().split(",").includes(r))&&!["пол","рост","размер одежды","цвет волос","длина волос","формат","прайс"].every(x=>get(p,x)))return false;
+ // Level 2 completion is validated by eligibleProfile above.
  if(!roleMatch(get(j.body,"кого ищу"),get(p,"кто вы")))return false;
  if(u.filters?.city&&!u.filters.city.split(",").some(x=>get(j.body,"город").toLowerCase().includes(x.trim().toLowerCase())))return false;
  if(u.filters?.work&&!u.filters.work.split(",").some(x=>get(j.body,"тип работы").toLowerCase().includes(x.trim().toLowerCase())))return false;
@@ -122,7 +122,7 @@ async function safetyOnce(u){
 async function dispatch(j){const users=await sql("SELECT * FROM mm_users WHERE blocked=FALSE AND suspended=FALSE AND active=TRUE AND photo IS NOT NULL AND id<>$1",j.owner);for(const u of users)try{await deliverTo(u,j)}catch(e){console.error("delivery",u.id,String(e))}}
 async function sendMatchedProfile(job,p){
  if(job.owner===p.id||job.owner===0||job.paused||job.status!=="active")return false;
- if(!p.active||p.blocked||p.suspended||!p.photo)return false;
+ if(!p.active||p.blocked||p.suspended||!eligibleProfile(p.profile,p.photo))return false;
  if(!roleMatch(get(job.body,"кого ищу"),get(p.profile,"кто вы")))return false;
  const city=get(job.body,"город").toLowerCase();
  if(city&&get(p.profile,"город")&&!get(p.profile,"город").toLowerCase().split(",").some(x=>city.includes(x.trim())))return false;
@@ -142,7 +142,7 @@ async function matchingProfilesForJob(job){
  for(const p of people)try{await sendMatchedProfile(job,p)}catch(e){console.error("profile delivery",String(e))}
 }
 async function profileBackfill(p){
- if(!p.photo)return;
+ if(!eligibleProfile(p.profile,p.photo))return;
  const jobs=await sql("SELECT * FROM mm_jobs WHERE owner<>$1 AND owner<>0 AND status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' ORDER BY created_at DESC LIMIT 80",p.id);
  for(const j of jobs)try{await sendMatchedProfile(j,p)}catch(e){console.error("profile backfill",String(e))}
 }
