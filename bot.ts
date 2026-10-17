@@ -87,7 +87,7 @@ const send=async(id,text,markup)=>{
  return result;
 };
 const buttons=rows=>({inline_keyboard:rows.map(row=>row.map(([text,callback_data])=>({text,callback_data})))});
-async function change(id,fields){let sets=[],vals=[];for(const [k,v] of Object.entries(fields)){vals.push(typeof v==="object"?JSON.stringify(v):v);sets.push(k+"=$"+vals.length+(typeof v==="object"?"::jsonb":""));}vals.push(id);await sql("UPDATE mm_users SET "+sets.join(",")+" WHERE id=$"+vals.length,...vals)}
+async function change(id,fields){let sets=[],vals=[];for(const [k,v] of Object.entries(fields)){const json=v!==null&&typeof v==="object";vals.push(json?JSON.stringify(v):v);sets.push(k+"=$"+vals.length+(json?"::jsonb":""));}vals.push(id);await sql("UPDATE mm_users SET "+sets.join(",")+" WHERE id=$"+vals.length,...vals)}
 async function who(f){await sql("INSERT INTO mm_users(id,username,first_name) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name",f.id,f.username||null,f.first_name||"");return(await sql("SELECT * FROM mm_users WHERE id=$1",f.id))[0]}
 const consentNames=["Оферта и правила сервиса","Обработка персональных данных","Показ анкеты другим"];
 let cachedDocHashes=null,cachedDocHashesUntil=0;
