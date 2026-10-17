@@ -34,6 +34,8 @@ export async function deleteAccount(sql,id){
  await sql("DELETE FROM mm_admin_log WHERE actor=$1 OR details->>\'target\'=$2",id,String(id));
  await sql("DELETE FROM mm_profile_deliveries WHERE user_id=$1 OR job_id IN (SELECT id FROM mm_jobs WHERE owner=$1)",id);
  await sql("DELETE FROM mm_deliveries WHERE user_id=$1 OR job_id IN (SELECT id FROM mm_jobs WHERE owner=$1)",id);
+ await sql("DELETE FROM mm_response_outbox WHERE response_id IN (SELECT id FROM mm_responses WHERE user_id=$1 OR job_id IN (SELECT id FROM mm_jobs WHERE owner=$1))",id);
+ await sql("DELETE FROM mm_fanout_queue WHERE job_id IN (SELECT id FROM mm_jobs WHERE owner=$1)",id);
  await sql("DELETE FROM mm_responses WHERE user_id=$1 OR job_id IN (SELECT id FROM mm_jobs WHERE owner=$1)",id);
  await sql("UPDATE mm_source_posts SET job_id=NULL WHERE job_id IN (SELECT id FROM mm_jobs WHERE owner=$1)",id);
  await sql("DELETE FROM mm_jobs WHERE owner=$1",id);
