@@ -63,8 +63,8 @@ function validJob(p){
  if(get(p,"дата съёмки")&&jobExpiresAt(get(p,"дата съёмки")).getTime()<Date.now())missing.push("дата съёмки уже прошла");
  return [...new Set(missing)];
 }
-async function profile(to,u,heading="Анкета"){if(!u.profile||!Object.keys(u.profile).length)return; if(u.photo)await call("sendPhoto",{chat_id:to,photo:u.photo});return send(to,"<b>"+esc(heading)+"</b>\n"+Object.entries(u.profile).filter(([k])=>!/дата рождения|телефон|telegram|instagram|фио/i.test(k)).map(([k,v])=>esc(k)+": "+esc(v)).join("\n")+"\nКонтакты скрыты.",buttons([[["✉️ Пригласить","invite:"+u.id],["⚠️ Пожаловаться","report"]]]))}
-async function card(to,j){let p=j.body;let lines=["<b>📢 "+esc(get(p,"название заявки"))+"</b>","Кого ищу: "+esc(get(p,"кого ищу")),"Тип работы: "+esc(get(p,"тип работы")),"Город: "+esc(get(p,"город")),"Требования: "+esc(get(p,"требования")||"не указано"),"Оплата: "+esc(get(p,"формат и оплата")),"Дата: "+esc(get(p,"дата съёмки")||"не указана"),"",esc(get(p,"описание"))];await send(to,lines.join("\n"),buttons([[["✋ Откликнуться","reply:"+j.id],["⚠️ Пожаловаться","report"]]]))}
+async function profile(to,u,heading="Анкета"){if(!u.profile||!Object.keys(u.profile).length)return; if(u.photo)await call("sendPhoto",{chat_id:to,photo:u.photo});return send(to,"<b>"+esc(heading)+"</b>\n"+Object.entries(u.profile).filter(([k])=>!/дата рождения|телефон|telegram|instagram|фио/i.test(k)).map(([k,v])=>esc(k)+": "+esc(v)).join("\n")+"\nКонтакты скрыты.",buttons([[["✉️ Пригласить","invite:"+u.id],["⚠️ Пожаловаться","reportuser:"+u.id]]]))}
+async function card(to,j){let p=j.body;let lines=["<b>📢 "+esc(get(p,"название заявки"))+"</b>","Кого ищу: "+esc(get(p,"кого ищу")),"Тип работы: "+esc(get(p,"тип работы")),"Город: "+esc(get(p,"город")),"Требования: "+esc(get(p,"требования")||"не указано"),"Оплата: "+esc(get(p,"формат и оплата")),"Дата: "+esc(get(p,"дата съёмки")||"не указана"),"",esc(sourcePublicText(get(p,"описание")))];await send(to,lines.join("\n"),buttons([[["✋ Откликнуться","reply:"+j.id],["⚠️ Пожаловаться","reportjob:"+j.id]]]))}
 async function matches(u,j){
  if(!u||u.blocked||u.suspended||!u.active||!u.photo||!Object.keys(u.profile||{}).length||j.paused||j.status!=="active")return false;
  const p=u.profile;
@@ -86,14 +86,116 @@ async function deliverTo(u,j){
 async function dispatch(j){const users=await sql("SELECT * FROM mm_users WHERE blocked=FALSE AND suspended=FALSE AND active=TRUE AND photo IS NOT NULL AND id<>$1",j.owner);for(const u of users)try{await deliverTo(u,j)}catch(e){console.error("delivery",u.id,String(e))}}
 async function backfill(u){const jobs=await sql("SELECT * FROM mm_jobs WHERE status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' ORDER BY created_at DESC LIMIT 100");for(const j of jobs)try{await deliverTo(u,j)}catch(e){console.error("backfill",String(e))}}
 
-async function onMessage(m){let u=await who(m.from),id=u.id,t=m.text||"";if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");if(t.startsWith("/start"))return begin(u);if(t==="/support"){await change(id,{state:"support"});return send(id,"Опишите проблему одним сообщением.");}if(admin.includes(String(id))&&t==="/stats"){let a=await sql("SELECT (SELECT count(*) FROM mm_users)::int AS users,(SELECT count(*) FROM mm_jobs)::int AS jobs,(SELECT count(*) FROM mm_reports)::int AS reports");return send(id,JSON.stringify(a[0]));}if(u.blocked)return; if(m.contact){if(m.contact.user_id!==id)return send(id,"Поделитесь именно своим номером.");await change(id,{phone:m.contact.phone_number});await call("sendMessage",{chat_id:id,text:"Телефон подтверждён.",reply_markup:{remove_keyboard:true}});return begin({...u,phone:m.contact.phone_number})}
+async function onMessage(m){if(m.chat?.type&&m.chat.type!=="private"){await onSourcePost(m);return}let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");if(t.startsWith("/start"))return begin(u);if(t==="/support"){await change(id,{state:"support"});return send(id,"Опишите проблему одним сообщением.");}if(admin.includes(String(id))&&t==="/stats"){let a=await sql("SELECT (SELECT count(*) FROM mm_users)::int AS users,(SELECT count(*) FROM mm_jobs)::int AS jobs,(SELECT count(*) FROM mm_reports)::int AS reports");return send(id,JSON.stringify(a[0]));}if(u.blocked||u.suspended)return send(id,"Ваш профиль ограничен; напишите /support."); if(m.contact){if(m.contact.user_id!==id)return send(id,"Поделитесь именно своим номером.");await change(id,{phone:m.contact.phone_number});await call("sendMessage",{chat_id:id,text:"Телефон подтверждён.",reply_markup:{remove_keyboard:true}});return begin({...u,phone:m.contact.phone_number})}
 if(Bun.env.REGISTRATION_ENABLED!=="true")return begin(u);
 if(m.photo?.length&&u.state==="photo"){await change(id,{photo:m.photo[m.photo.length-1].file_id,state:""});await send(id,"Фото добавлено ✅");return begin(u)}
-if(u.state==="support"){await sql("INSERT INTO mm_reports(user_id,body) VALUES($1,$2)",id,t.slice(0,3000));await change(id,{state:""});return send(id,"Обращение сохранено. Модератор сможет его прочитать.")}
+if(u.state==="support"){if(m.photo?.length)return saveReport(u,m.caption||"Фото-доказательство",m.photo.at(-1).file_id);return saveReport(u,t)}
 if(u.state==="profile"){let p=parse(t),errors=validProfile(p);if(errors.length)return send(id,"Уточните:\n• "+esc(errors.join("\n• "))+"\nОтправьте исправленный шаблон.");await change(id,{profile:p,state:"profile_confirm"});return send(id,"<b>Проверьте анкету:</b>\n"+esc(t),buttons([[["✅ Сохранить","profile_save"],["✏️ Исправить","edit_profile"]]]))}
 if(u.state==="job"){let p=parse(t),errors=validJob(p);if(errors.length)return send(id,"Исправьте заявку:\n• "+esc(errors.join("\n• ")));await change(id,{filters:{...(u.filters||{}),draft:p},state:"job_confirm"});return send(id,"Предпросмотр:\n"+esc(t),buttons([[["✅ Опубликовать","publish"],["✏️ Исправить","new"]]]))}
-if(u.state==="filter"){let p=parse(t);await change(id,{filters:{city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});return send(id,"Фильтры сохранены.",menu)}
+if(u.state==="filter"){let p=parse(t);await change(id,{filters:{city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});await send(id,"Фильтры сохранены. Подбираю актуальные заявки.",menu);const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];return backfill(fresh)}
 return begin(u)}
-async function onCallback(c){await call("answerCallbackQuery",{callback_query_id:c.id});let u=await who(c.from),id=u.id,a=c.data;if(a.startsWith("consent:")){let n=+a.slice(8),co={...u.consent};if(n<0||n>2)return;co[n]=!co[n];co.version=Bun.env.DOC_VERSION||"draft";co[n+"_at"]=new Date().toISOString();await change(id,{consent:co});return call("editMessageReplyMarkup",{chat_id:id,message_id:c.message.message_id,reply_markup:consentBoard({...u,consent:co})})}if(a==="docs")return send(id,"Документы ещё не опубликованы владельцем. Регистрация закрыта до их утверждения.");if(a==="go")return begin(u);if(Bun.env.REGISTRATION_ENABLED!=="true")return begin(u);if(!u.phone||!u.username)return begin(u);if(a==="profile"){if(Object.keys(u.profile||{}).length)await profile(id,u,"Ваша анкета");return send(id,"Анкета редактируется одним текстовым сообщением.",buttons([[["✏️ Заполнить или изменить","edit_profile"],["📷 Добавить фото","addphoto"]]]))}if(a==="edit_profile"){await change(id,{state:"profile"});return send(id,"Скопируйте и заполните шаблон отдельным сообщением:\n<code>"+esc(profileTpl)+"</code>")}if(a==="profile_save"){await change(id,{state:""});return send(id,"Анкета сохранена! Теперь добавьте ключевое фото.",buttons([[["📷 Добавить фото","addphoto"]]]))}if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправьте фото отдельным сообщением. Оно станет ключевым.");}if(a==="new"){await change(id,{state:"job"});return send(id,"Скопируйте и заполните шаблон заявки одним сообщением:\n<code>"+esc(jobTpl)+"</code>")}if(a==="publish"){let p=u.filters?.draft;if(!p)return send(id,"Черновик не найден.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>NOW()-INTERVAL '7 days'",id);if(n[0].total)return send(id,"Без подписки можно разместить одну заявку в неделю.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const row=(await sql("INSERT INTO mm_jobs(owner,body,expires_at) VALUES($1,$2::jsonb,$3) RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString()))[0];await change(id,{state:"",filters:Object.fromEntries(Object.entries(u.filters).filter(([k])=>k!=="draft"))});await send(id,"Заявка №"+row.id+" опубликована.");await dispatch(row);return}if(a==="jobs"){let js=await sql("SELECT * FROM mm_jobs WHERE status='active' AND expires_at>NOW() ORDER BY created_at DESC LIMIT 15");if(!js.length)return send(id,"Актуальных заявок пока нет.");for(let j of js)await card(id,j);return}if(a==="mine"){let js=await sql("SELECT * FROM mm_jobs WHERE owner=$1 ORDER BY id DESC LIMIT 20",id);if(!js.length)return send(id,"Ваших заявок пока нет.");for(let j of js)await send(id,"№"+j.id+" — "+esc(get(j.body,"название заявки"))+" ("+esc(j.status)+")",buttons([[["Закрыть","close:"+j.id]]]));return}if(a.startsWith("close:")){await sql("UPDATE mm_jobs SET status='closed' WHERE id=$1 AND owner=$2",+a.slice(6),id);return send(id,"Заявка закрыта.")}if(a==="filters"){await change(id,{state:"filter"});return send(id,"Отправьте:\n<code>Город: Москва\nТип работы: реклама\nФормат: коммерция</code>")}if(a==="pause"){await change(id,{active:!u.active});return send(id,u.active?"Поиск приостановлен.":"Поиск возобновлён.")}if(a==="reply:"+a.slice(6)&&a.startsWith("reply:")){let j=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND expires_at>NOW()",+a.slice(6)))[0];if(!j)return send(id,"Заявка недоступна.");if(!u.photo)return send(id,"Сначала добавьте фото в анкету.");let n=await sql("SELECT count(*)::int AS n FROM mm_responses WHERE user_id=$1 AND created_at>NOW()-INTERVAL '7 days'",id);if(n[0].n)return send(id,"Бесплатный лимит — 1 отклик в неделю.");let saved=await sql("INSERT INTO mm_responses(job_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING id",j.id,id);if(!saved.length)return send(id,"Отклик уже учтён.");const owner=(await sql("SELECT * FROM mm_users WHERE id=$1",j.owner))[0];if(owner?.username){const draft="Здравствуйте! Откликаюсь на заявку «"+get(j.body,"название заявки")+"». С радостью обсужу детали.";await send(id,"Для отправки откройте диалог:",{inline_keyboard:[[{text:"✉️ Написать автору",url:"https://t.me/"+owner.username+"?text="+encodeURIComponent(draft)}]]})}else await send(id,"Отклик учтён, но у автора нет доступного @ника.");if(owner){await send(owner.id,"Отклик на заявку №"+j.id);await profile(owner.id,u,"Анкета откликнувшегося")}return}if(a.startsWith("invite:")){let p=(await sql("SELECT * FROM mm_users WHERE id=$1",+a.slice(7)))[0];if(p?.username)return send(id,"Откройте контакт участника:",{inline_keyboard:[[{text:"✉️ Написать",url:"https://t.me/"+p.username}]]});return send(id,"Нет доступного контакта.")}if(a==="report"||a==="support"){await change(id,{state:"support"});return send(id,"Опишите жалобу или обращение своими словами.")}}
-Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){let u=new URL(r.url);if(u.pathname==="/health"){try{await ensure();return Response.json({ok:true,registration:Bun.env.REGISTRATION_ENABLED==="true"})}catch(e){return new Response("Database unavailable",{status:503})}}if(u.pathname==="/webhook"&&r.method==="POST"){if(!secret||r.headers.get("x-telegram-bot-api-secret-token")!==secret)return new Response("Forbidden",{status:403});try{await ensure();let x=await r.json();let ok=await sql("INSERT INTO mm_updates(id) VALUES($1) ON CONFLICT DO NOTHING RETURNING id",x.update_id);if(ok.length){if(x.message?.from)await onMessage(x.message);if(x.callback_query?.from)await onCallback(x.callback_query)}return new Response("ok")}catch(e){console.error("Update error",e);return new Response("error",{status:500})}}return new Response("World Models Bot")}})
-if(token&&secret&&Bun.env.PUBLIC_URL)call("setWebhook",{url:Bun.env.PUBLIC_URL.replace(/\/$/,"")+"/webhook",secret_token:secret,allowed_updates:["message","callback_query"]}).then(r=>console.log("Webhook configured",r.ok)).catch(console.error);
+async function onCallback(c){await call("answerCallbackQuery",{callback_query_id:c.id});let u=await who(c.from),id=u.id,a=c.data;if(a.startsWith("consent:")){let n=+a.slice(8),co={...u.consent};if(n<0||n>2)return;co[n]=!co[n];co.version=Bun.env.DOC_VERSION||"draft";co[n+"_at"]=new Date().toISOString();await change(id,{consent:co});return call("editMessageReplyMarkup",{chat_id:id,message_id:c.message.message_id,reply_markup:consentBoard({...u,consent:co})})}if(a==="docs")return send(id,"Документы ещё не опубликованы владельцем. Регистрация закрыта до их утверждения.");if(a==="go")return begin(u);if(Bun.env.REGISTRATION_ENABLED!=="true")return begin(u);if(!u.phone||!u.username)return begin(u);if(a==="profile"){if(Object.keys(u.profile||{}).length)await profile(id,u,"Ваша анкета");return send(id,"Анкета редактируется одним текстовым сообщением.",buttons([[["✏️ Заполнить или изменить","edit_profile"],["📷 Добавить фото","addphoto"]]]))}if(a==="edit_profile"){await change(id,{state:"profile"});return send(id,"Скопируйте и заполните шаблон отдельным сообщением:\n<code>"+esc(profileTpl)+"</code>")}if(a==="profile_save"){await change(id,{state:""});return send(id,"Анкета сохранена! Теперь добавьте ключевое фото.",buttons([[["📷 Добавить фото","addphoto"]]]))}if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправьте фото отдельным сообщением. Оно станет ключевым.");}if(a==="new"){await change(id,{state:"job"});return send(id,"Скопируйте и заполните шаблон заявки одним сообщением:\n<code>"+esc(jobTpl)+"</code>")}if(a==="publish"){let p=u.filters?.draft;if(!p)return send(id,"Черновик не найден.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>NOW()-INTERVAL '7 days'",id);if(n[0].total)return send(id,"Без подписки можно разместить одну заявку в неделю.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const row=(await sql("INSERT INTO mm_jobs(owner,body,expires_at) VALUES($1,$2::jsonb,$3) RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString()))[0];await change(id,{state:"",filters:Object.fromEntries(Object.entries(u.filters).filter(([k])=>k!=="draft"))});await send(id,"Заявка №"+row.id+" опубликована.");await dispatch(row);return}if(a==="jobs"){let js=await sql("SELECT * FROM mm_jobs WHERE status='active' AND expires_at>NOW() ORDER BY created_at DESC LIMIT 15");if(!js.length)return send(id,"Актуальных заявок пока нет.");for(let j of js)await card(id,j);return}if(a==="mine"){let js=await sql("SELECT * FROM mm_jobs WHERE owner=$1 ORDER BY id DESC LIMIT 20",id);if(!js.length)return send(id,"Ваших заявок пока нет.");for(let j of js)await send(id,"№"+j.id+" — "+esc(get(j.body,"название заявки"))+" ("+esc(j.status)+")",buttons([[["Закрыть","close:"+j.id]]]));return}if(a.startsWith("close:")){await sql("UPDATE mm_jobs SET status='closed' WHERE id=$1 AND owner=$2",+a.slice(6),id);return send(id,"Заявка закрыта.")}if(a==="filters"){await change(id,{state:"filter"});return send(id,"Отправьте:\n<code>Город: Москва\nТип работы: реклама\nФормат: коммерция</code>")}if(a==="pause"){await change(id,{active:!u.active});return send(id,u.active?"Поиск приостановлен.":"Поиск возобновлён.")}if(a==="reply:"+a.slice(6)&&a.startsWith("reply:")){let j=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND expires_at>NOW()",+a.slice(6)))[0];if(!j)return send(id,"Заявка недоступна.");if(!u.photo)return send(id,"Сначала добавьте фото в анкету.");let n=await sql("SELECT count(*)::int AS n FROM mm_responses WHERE user_id=$1 AND created_at>NOW()-INTERVAL '7 days'",id);if(n[0].n)return send(id,"Бесплатный лимит — 1 отклик в неделю.");let saved=await sql("INSERT INTO mm_responses(job_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING id",j.id,id);if(!saved.length)return send(id,"Отклик уже учтён.");const owner=(await sql("SELECT * FROM mm_users WHERE id=$1",j.owner))[0];if(owner?.username){const draft="Здравствуйте! Откликаюсь на заявку «"+get(j.body,"название заявки")+"». С радостью обсужу детали.";await send(id,"Для отправки откройте диалог:",{inline_keyboard:[[{text:"✉️ Написать автору",url:"https://t.me/"+owner.username+"?text="+encodeURIComponent(draft)}]]})}else await send(id,"Отклик учтён, но у автора нет доступного @ника.");if(owner){await send(owner.id,"Отклик на заявку №"+j.id);await profile(owner.id,u,"Анкета откликнувшегося")}return}if(a.startsWith("invite:")){let p=(await sql("SELECT * FROM mm_users WHERE id=$1",+a.slice(7)))[0];if(p?.username)return send(id,"Откройте контакт участника:",{inline_keyboard:[[{text:"✉️ Написать",url:"https://t.me/"+p.username}]]});return send(id,"Нет доступного контакта.")}if(a.startsWith("reportjob:")||a.startsWith("reportuser:")||a==="report"||a==="support"){const f={...(u.filters||{})};f.reportTarget=a.startsWith("reportjob:")?{job:Number(a.slice(10))}:a.startsWith("reportuser:")?{user:Number(a.slice(11))}:{};await change(id,{state:"support",filters:f});return send(id,"Опишите причину своими словами. Можно приложить скриншот.")}}
+
+function sourcePublicText(raw) {
+ return String(raw||"").replace(/(?:https?:\/\/)?t\.me\/[a-zA-Z0-9_]{5,32}/gi,"[контакт скрыт]")
+ .replace(/(?:^|[\s(])@[A-Za-z0-9_]{5,32}\b/g," [контакт скрыт]")
+ .replace(/(?:\+7|8)[\d\s()\-]{9,16}\d/g,"[контакт скрыт]");
+}
+async function onSourcePost(m) {
+ const sourceId=m?.chat?.id;
+ if(!sourceId)return;
+ const settings=(await sql("SELECT * FROM mm_sources WHERE id=$1 AND active=TRUE",sourceId))[0];
+ if(!settings)return;
+ const raw=(m.text||m.caption||"").slice(0,5000);
+ const parsed=parseSourcePost(raw,{city:settings.city,topic:settings.topic});
+ const decision=moderate(raw);
+ const exists=await sql("SELECT 1 FROM mm_source_posts WHERE source_id=$1 AND telegram_message_id=$2",sourceId,m.message_id);
+ if(exists.length)return;
+ let state=decision.status==="reject"?"rejected":decision.status==="review"?"pending":"active";
+ if(!parsed)state="rejected";
+ if(parsed && /(?:несовершеннолет|до\s+1[0-7]\s+лет|дети\s+1[0-7]\s+лет)/i.test(raw))state="pending";
+ let job=null;
+ const contact=extractContact(raw);
+ if(parsed&&state!=="rejected"){
+   // Deduplicate ONLY with an identical contact and >=95% textual similarity in the last seven days.
+   const recent=await sql("SELECT * FROM mm_jobs WHERE source_id IS NOT NULL AND contact=$1 AND created_at>NOW()-INTERVAL '7 days' ORDER BY created_at DESC LIMIT 50",contact);
+   job=recent.find(x=>similarity(get(x.body,"описание"),raw)>=.95)||null;
+   if(!job){
+     const stored={...parsed,"описание":raw};
+     const eventDate=get(parsed,"дата съёмки");
+     if(eventDate && jobExpiresAt(eventDate).getTime()<Date.now())state="rejected";
+     if(state!=="rejected"){
+       job=(await sql("INSERT INTO mm_jobs(owner,body,status,expires_at,source_id,contact) VALUES(0,$1::jsonb,$2,$3,$4,$5) RETURNING *",JSON.stringify(stored),state,jobExpiresAt(eventDate).toISOString(),sourceId,contact))[0];
+     }
+   }
+ }
+ await sql("INSERT INTO mm_source_posts(source_id,telegram_message_id,job_id,moderation,reason) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING",sourceId,m.message_id,job?.id||null,state,decision.reason||"");
+ if(job?.status==="active" && state==="active" && job?.source_id===sourceId)await dispatch(job);
+ if(state==="pending"&&job)for(const id of admin.filter(x=>/^\d+$/.test(x)))try{
+   await send(id,"⚠️ Заявка из источника ожидает модерации.\n№"+job.id+"\n"+esc(sourcePublicText(raw.slice(0,1300)))+"\nКоманды: /approve "+job.id+" или /reject "+job.id);
+ }catch(e){console.error("admin alert",String(e))}
+}
+async function adminAction(u,t){
+ const id=u.id;if(!admin.includes(String(id)))return false;
+ const add=t.match(/^\/source_add\s+(-?\d+)(?:\s+([^|]+))?(?:\|(.+))?$/);
+ if(add){
+   const source=Number(add[1]),city=(add[2]||"").trim(),topic=(add[3]||"").trim();
+   await sql("INSERT INTO mm_sources(id,city,topic,active) VALUES($1,$2,$3,TRUE) ON CONFLICT(id) DO UPDATE SET city=EXCLUDED.city,topic=EXCLUDED.topic,active=TRUE",source,city,topic);
+   await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES($1,$2,$3::jsonb)",id,"source_add",JSON.stringify({source,city,topic}));
+   await send(id,"Источник "+source+" добавлен. Бот должен иметь доступ к сообщениям канала или чата.");
+   return true;
+ }
+ if(t==="/sources"){
+   const rows=await sql("SELECT * FROM mm_sources ORDER BY id LIMIT 80");
+   await send(id,rows.length?rows.map(x=>x.id+" · "+esc(x.city)+" · "+esc(x.topic)+" · "+(x.active?"✅":"⏸")).join("\n"):"Источников пока нет.");
+   return true;
+ }
+ let m=t.match(/^\/source_off\s+(-?\d+)$/);
+ if(m){await sql("UPDATE mm_sources SET active=FALSE WHERE id=$1",Number(m[1]));await send(id,"Источник выключен.");return true}
+ m=t.match(/^\/(approve|reject)\s+(\d+)$/);
+ if(m){
+   const state=m[1]==="approve"?"active":"rejected";
+   const jobs=await sql("UPDATE mm_jobs SET status=$1 WHERE id=$2 AND status='pending' RETURNING *",state,Number(m[2]));
+   if(!jobs.length){await send(id,"Заявка не найдена в очереди.");return true}
+   await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES($1,$2,$3::jsonb)",id,m[1],JSON.stringify({job:jobs[0].id}));
+   await send(id,"Заявка №"+jobs[0].id+": "+state);
+   if(state==="active")await dispatch(jobs[0]);
+   return true;
+ }
+ if(t==="/review"){
+   const rows=await sql("SELECT id,body FROM mm_jobs WHERE status='pending' ORDER BY id LIMIT 15");
+   await send(id,rows.length?rows.map(x=>"№"+x.id+" "+esc(get(x.body,"название заявки"))).join("\n"):"На модерации нет заявок.");
+   return true;
+ }
+ m=t.match(/^\/(block|unblock|suspend|unsuspend)\s+(\d+)$/);
+ if(m){
+   const col=m[1].includes("block")?"blocked":"suspended";
+   const flag=m[1]==="block"||m[1]==="suspend";
+   await sql("UPDATE mm_users SET "+col+"=$1 WHERE id=$2",flag,Number(m[2]));
+   await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES($1,$2,$3::jsonb)",id,m[1],JSON.stringify({target:m[2]}));
+   await send(id,"Изменён статус пользователя "+m[2]);
+   return true;
+ }
+ if(t==="/stats"){
+   const rows=await sql("SELECT (SELECT COUNT(*) FROM mm_users)::int users,(SELECT COUNT(*) FROM mm_jobs)::int jobs,(SELECT COUNT(*) FROM mm_jobs WHERE source_id IS NOT NULL)::int imported,(SELECT COUNT(*) FROM mm_responses)::int replies,(SELECT COUNT(*) FROM mm_reports_v2)::int reports,(SELECT COUNT(*) FROM mm_sources WHERE active)::int sources");
+   await send(id,"📊 Мир моделей\n"+Object.entries(rows[0]).map(([k,v])=>k+": "+v).join("\n"));
+   return true;
+ }
+ return false;
+}
+async function saveReport(u,txt,photo=null){
+ const meta=u.filters?.reportTarget||{};
+ const target_user=meta.user||null, target_job=meta.job||null;
+ await sql("INSERT INTO mm_reports_v2(reporter,target_user,target_job,kind,body,photo) VALUES($1,$2,$3,$4,$5,$6)",u.id,target_user,target_job,target_user||target_job?"complaint":"support",txt.slice(0,3000),photo);
+ const f={...(u.filters||{})};delete f.reportTarget;
+ await change(u.id,{state:"",filters:f});
+ if(target_user){
+   const n=await sql("SELECT COUNT(DISTINCT reporter)::int n FROM mm_reports_v2 WHERE target_user=$1 AND kind='complaint'",target_user);
+   if(n[0].n>=3)await sql("UPDATE mm_users SET suspended=TRUE WHERE id=$1",target_user);
+ }
+ for(const a of admin.filter(x=>/^\d+$/.test(x)))try{await send(a,"📩 Новое обращение от "+u.id+"; объект: "+(target_user||target_job||"поддержка")+"\n"+esc(txt.slice(0,1400)))}catch(e){console.error("notify admin",String(e))}
+ await send(u.id,"Обращение записано. Модератор сможет его проверить.");
+}
+
+Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){let u=new URL(r.url);if(u.pathname==="/health"){try{await ensure();return Response.json({ok:true,registration:Bun.env.REGISTRATION_ENABLED==="true"})}catch(e){return new Response("Database unavailable",{status:503})}}if(u.pathname==="/webhook"&&r.method==="POST"){if(!secret||r.headers.get("x-telegram-bot-api-secret-token")!==secret)return new Response("Forbidden",{status:403});try{await ensure();let x=await r.json();let ok=await sql("INSERT INTO mm_updates(id) VALUES($1) ON CONFLICT DO NOTHING RETURNING id",x.update_id);if(ok.length){if(x.message?.from||x.message?.chat?.type!=="private")if(x.message)await onMessage(x.message);if(x.channel_post)await onSourcePost(x.channel_post);if(x.callback_query?.from)await onCallback(x.callback_query)}return new Response("ok")}catch(e){console.error("Update error",e);return new Response("error",{status:500})}}return new Response("World Models Bot")}})
+if(token&&secret&&Bun.env.PUBLIC_URL)call("setWebhook",{url:Bun.env.PUBLIC_URL.replace(/\/$/,"")+"/webhook",secret_token:secret,allowed_updates:["message","channel_post","callback_query"]}).then(r=>console.log("Webhook configured",r.ok)).catch(console.error);
