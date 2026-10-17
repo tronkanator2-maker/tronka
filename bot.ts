@@ -315,7 +315,7 @@ async function browseProfiles(u,offset=0){
  rows.push([["⚙️ Профессия","browse_roles"],["🏙 Город","browse_city"]]);
  rows.push([["🏠 В меню","home"]]);
  await send(u.id,"🔎 <b>Каталог анкет</b> • показаны "+page.length+" из "+publicProfiles.length+
-  "\\nГород: "+esc(city||"все")+" · Профессия: "+esc(requested.join(", ")||"все"),buttons(rows));
+  "\nГород: "+esc(city||"все")+" · Профессия: "+esc(requested.join(", ")||"все"),buttons(rows));
 }
 async function chooseBrowseRole(u){
  const rows=[[["Все направления","browse_role:all"]]];
