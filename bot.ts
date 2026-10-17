@@ -193,8 +193,8 @@ async function sendMatchedProfile(job,p){
  if(job.owner===p.id||job.owner===0||job.paused||job.status!=="active")return false;
  if(!p.active||p.blocked||p.suspended||!allConsentsCurrent(p.consent,await currentDocumentHashes())||!eligibleProfile(p.profile,p.photo))return false;
  if(!roleMatch(get(job.body,"кого ищу"),get(p.profile,"кто вы")))return false;
- const owner=(await sql("SELECT filters FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE",job.owner))[0];
- if(!owner||!allConsentsCurrent((await sql("SELECT consent FROM mm_users WHERE id=$1",job.owner))[0]?.consent,await currentDocumentHashes())||!matchesWantedProfileRoles(owner.filters?.profileRoles||[],get(p.profile,"кто вы")))return false;
+ const owner=(await sql("SELECT filters,consent FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE",job.owner))[0];
+ if(!owner||!allConsentsCurrent(owner.consent,await currentDocumentHashes())||!matchesWantedProfileRoles(owner.filters?.profileRoles||[],get(p.profile,"кто вы")))return false;
  if(isExplicitAdultCasting([get(job.body,"описание"),get(job.body,"требования"),get(job.body,"тип работы")].join(" ")) && !(p.filters?.adult===true && ageAt(get(p.profile,"дата рождения"))>=18))return false;
  if(!matchesCastingRequirements(p.profile,job.body))return false;
  if(!payMatches(p.profile,job.body))return false;
