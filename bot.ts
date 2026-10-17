@@ -1,4 +1,5 @@
 import {SQL} from "bun";
+import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
 import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer} from "./profile-wizard.ts";
 import {isTestMode,canRegister,canUseTestFeatures,testWarning,testMenuText} from "./test-mode.ts";
 import {redactContacts,publicProfileEntries,publicProfileAllowed} from "./visibility.ts";
@@ -406,20 +407,20 @@ async function promptWizard(u){
  const item=wizardField(role,step);
  if(!item)return finishWizard(u);
  const total=fields.length;
- const existing=u.profile?.[item.key];
+ const existing=profileDraftOf(u)[item.key];
  return send(u.id,"✍️ <b>Анкета · шаг "+(step+1)+" из "+total+"</b>\n\n"+esc(item.label)+"\nПример: <code>"+esc(item.example)+"</code>"+(existing?"\nСейчас: "+esc(existing):"")+(testMode()&&item.key==="дата рождения"?"\n🧪 Укажите вымышленную дату.":""),buttons([
   ...(item.required?[]:[[["⏭ Пропустить","wizard:skip"]]]),
   [[["◀️ Назад","wizard:back"],["❌ Отменить","wizard:cancel"]]]
  ]));
 }
 async function finishWizard(u){
- const errors=validProfile(u.profile||{});
+ const draft=profileDraftOf(u),errors=validProfile(draft);
  if(errors.length){
   await change(u.id,{state:"profile"});
   return send(u.id,"Анкета почти готова, но нужно исправить:\n• "+esc(errors.join("\n• "))+"\n\nПришлите недостающие поля текстом в формате «Название: значение».",buttons([[["✏️ Исправить вручную","edit_profile"]],[["◀️ В меню","home"]]]));
  }
  await change(u.id,{state:"profile_confirm"});
- const summary=Object.entries(u.profile||{}).map(([key,value])=>esc(key)+": "+esc(value)).join("\n");
+ const summary=Object.entries(draft).map(([key,value])=>esc(key)+": "+esc(value)).join("\n");
  return send(u.id,"✅ <b>Анкета заполнена</b>\n\n"+summary+"\n\nТеперь сохраните анкету и добавьте главное фото.",buttons([[["✅ Сохранить анкету","profile_save"],["✏️ Исправить","edit_profile"]]]));
 }
 async function showWizardRolePage(id,page=0){
@@ -437,19 +438,19 @@ async function showWizardRolePage(id,page=0){
 
 async function startWizard(u,role){
  if(!WIZARD_ROLES.includes(role))return send(u.id,"Выберите профессию из списка.");
- const profile={...(u.profile||{}),"кто вы":role};
- const filters={...(u.filters||{}),wizardRole:role,wizardStep:0};
- await change(u.id,{state:"wizard",profile,filters});
- return promptWizard({...u,profile,filters});
+ const profile={...profileDraftOf(u),"кто вы":role};
+ const filters=stageProfileDraft(u.filters,profile,{wizardRole:role,wizardStep:0});
+ await change(u.id,{state:"wizard",filters});
+ return promptWizard({...u,filters});
 }
 async function acceptWizardText(u,txt){
  const role=u.filters?.wizardRole,step=Number(u.filters?.wizardStep||0);
  const item=wizardField(role,step),accepted=wizardAnswer(item,txt);
  if(!accepted.ok)return send(u.id,"⚠️ "+esc(accepted.error));
- const profile={...(u.profile||{}),[item.key]:accepted.value};
- const filters={...(u.filters||{}),wizardStep:step+1};
- await change(u.id,{profile,filters});
- const current={...u,profile,filters};
+ const profile={...profileDraftOf(u),[item.key]:accepted.value};
+ const filters=stageProfileDraft(u.filters,profile,{wizardStep:step+1});
+ await change(u.id,{filters});
+ const current={...u,filters};
  return wizardCompleted(role,filters.wizardStep)?finishWizard(current):promptWizard(current);
 }
 
@@ -496,7 +497,7 @@ async function onMessage(m){
   return send(m.from.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации документов и проверки интеграций. Пока можно посмотреть демонстрацию.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));
  }
  let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
- if(t==="/cancel"){const f={...(u.filters||{})};delete f.replyJobId;await change(id,{state:"",filters:f});return send(id,"Текущее действие отменено. Вернуться в меню: /start");}
+ if(t==="/cancel"){const f=discardProfileDraft(u.filters);delete f.replyJobId;delete f.draft;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
  if(t==="/teststatus")return send(id,testMode()?"🧪 Тестовый режим активен. Регистрация открыта: "+(testReady()?"да":"нет")+"\nПлатежи отключены.\nТелефон не требуется.":"Тестовый режим выключен.");if(t==="/mydata"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Данных нет.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Не получилось отправить архив. Попробуйте позже.");return;}
  if(t==="/deleteaccount"){await change(id,{state:"delete_confirm"});return send(id,"<b>Удалить аккаунт и данные?</b>\nЭто удалит анкету, фотографии из нашей базы, ваши заявки, историю откликов, отзывов, приглашений, согласий и обращений. Сообщения, ранее отправленные другим пользователям Telegram, стереть удалённо нельзя.\n\nПодтвердите удаление отдельной кнопкой.",buttons([[["❌ Удалить мои данные","deleteaccount:confirm"]],[["Отмена","deleteaccount:cancel"]]]));}if(t==="/subscription"&&testMode())return send(id,"🧪 Тестовый доступ: лимиты заявок, откликов и приглашений для проверки сняты. Настоящие платежи выключены.");if(t==="/subscription")return send(id,hasPaidAccess(u)?"⭐ Подписка или пробный период активны до "+esc(new Date(u.access_until&&new Date(u.access_until)>new Date(u.trial_until||0)?u.access_until:u.trial_until).toLocaleDateString("ru-RU")):"Бесплатный доступ: один отклик, одна заявка и одно приглашение в календарную неделю.");if(t.startsWith("/start")){
  const payload=t.trim().split(/\s+/)[1]||"";
@@ -656,7 +657,7 @@ if(a==="docs")return send(id,"Все опубликованные докумен
   const role=WIZARD_ROLES[Number(a.slice("wizard:role:".length))];
   return startWizard(u,role);
  }
- if(a==="wizard:cancel"){await change(id,{state:""});return begin({...u,state:""});}
+ if(a==="wizard:cancel"){await change(id,{state:"",filters:discardProfileDraft(u.filters)});return send(id,"Изменения анкеты отменены. Ваш прежний профиль сохранён.",buttons([[["🏠 В меню","home"],["👤 Моя анкета","profile"]]]));}
  if(a==="wizard:back"||a==="wizard:skip"){
   if(u.state!=="wizard")return send(id,"Мастер заполнения завершён. Откройте анкету заново.");
   const role=u.filters?.wizardRole,step=Number(u.filters?.wizardStep||0);
