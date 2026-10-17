@@ -1,3 +1,4 @@
+import {publishDocument} from "./documents.ts";
 // Minimal secured operational dashboard. Disabled until both ADMIN_PASSWORD and ADMIN_TOTP_SECRET are configured.
 // Session tokens are only kept in memory; no user data is exposed to unauthenticated requests.
 const sessions = new Map();
@@ -46,11 +47,12 @@ const appHtml = [
  '<!doctype html><html lang="ru"><head><meta charset="utf-8">',
  '<meta name="viewport" content="width=device-width, initial-scale=1">',
  '<title>Мир моделей — управление</title>',
- '<style>body{font-family:system-ui;background:#0e1523;color:#eef3ff;margin:0;padding:32px}main{max-width:1100px;margin:auto}header{display:flex;justify-content:space-between;align-items:center}h1{margin:0 0 12px}p{color:#a8b5ce}.panel{background:#192436;border:1px solid #304057;border-radius:14px;padding:22px;margin:16px 0}input,button,select{background:#25344c;border:1px solid #526680;color:#fff;border-radius:8px;padding:11px;margin:5px;font:inherit}button{cursor:pointer}button:hover{background:#375072}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 monospace}code{color:#8abaff}.small{font-size:13px;color:#a8b5ce}#msg{color:#ffd292}</style>',
+ '<style>body{font-family:system-ui;background:#0e1523;color:#eef3ff;margin:0;padding:32px}main{max-width:1100px;margin:auto}header{display:flex;justify-content:space-between;align-items:center}h1{margin:0 0 12px}p{color:#a8b5ce}.panel{background:#192436;border:1px solid #304057;border-radius:14px;padding:22px;margin:16px 0}input,button,select,textarea{background:#25344c;border:1px solid #526680;color:#fff;border-radius:8px;padding:11px;margin:5px;font:inherit}button{cursor:pointer}button:hover{background:#375072}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 monospace}code{color:#8abaff}.small{font-size:13px;color:#a8b5ce}#msg{color:#ffd292}</style>',
  '</head><body><main><header><h1>🎬 Мир моделей</h1><span class="small">Панель управления</span></header>',
  '<p>Модерация · пользователи · заявки · источники · обращения</p>',
  '<section class="panel" id="login"><h2>Вход</h2><form id="form"><input name="password" placeholder="Пароль" type="password" required><input name="otp" placeholder="Код 2FA" inputmode="numeric" maxlength="6" required><button>Войти</button></form></section>',
  '<section id="dashboard" style="display:none"><div class="panel"><button data-op="refresh">Обновить</button><button data-op="logout">Выйти</button><p id="counters"></p></div>',
+ '<div class="panel"><h2>Юридические документы</h2><p>Публикуйте только утверждённые юристом тексты. Новая редакция сохранится отдельно от предыдущей.</p><form id="documentForm"><select name="slug"><option value="offer">Оферта</option><option value="rules">Правила</option><option value="privacy">Политика конфиденциальности</option><option value="processing">Обработка данных</option><option value="distribution">Распространение анкеты</option><option value="esignature">Электронная подпись</option><option value="safety">Безопасность</option><option value="portfolio">Портфолио</option></select><input name="title" placeholder="Название"><textarea name="body" placeholder="Полный текст утверждённого документа" rows="8" required></textarea><button>Опубликовать новую версию</button></form><p><a href="/documents">Открыть документы</a></p></div>',
  '<div class="panel"><h2>Источники Telegram</h2><form id="source"><input name="id" placeholder="-100... ID источника" required><input name="city" placeholder="Город"><input name="topic" placeholder="Тема"><button>Добавить / включить</button></form><pre id="sources"></pre></div>',
  '<div class="panel"><h2>Модерация</h2><form id="decision"><input name="id" placeholder="№ заявки" required><select name="action"><option value="approve">Одобрить</option><option value="reject">Отклонить</option></select><button>Применить</button></form><pre id="pending"></pre></div>',
  '<div class="panel"><h2>Обращения</h2><pre id="reports"></pre></div>',
@@ -61,6 +63,7 @@ const appHtml = [
  'const view=(id,obj)=>{$(id).textContent=typeof obj==="string"?obj:JSON.stringify(obj,null,2)};',
  'async function refresh(){try{const d=await api("data");$("login").style.display="none";$("dashboard").style.display="block";view("counters",d.stats);view("sources",d.sources);view("pending",d.pending);view("reports",d.reports);view("users",d.users);$("msg").textContent=""}catch(e){$("dashboard").style.display="none";$("login").style.display="block";$("msg").textContent=e.message}}',
  '$("form").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("login",{password:f.get("password"),otp:f.get("otp")});e.target.reset();refresh()}catch(err){$("msg").textContent=err.message}};',
+ '$("documentForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);if(!confirm("Вы уверены, что документ юридически утверждён?"))return;try{const result=await api("action",{action:"document_publish",slug:f.get("slug"),title:f.get("title"),body:f.get("body")});$("msg").textContent="Опубликована версия "+result.document.version;refresh()}catch(err){$("msg").textContent=err.message}};',
  '$("source").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:"source_add",id:f.get("id"),city:f.get("city"),topic:f.get("topic")});refresh()}catch(err){$("msg").textContent=err.message}};',
  'for(const formId of ["decision","usersForm"]){$(formId).onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:f.get("action"),id:f.get("id")});refresh()}catch(err){$("msg").textContent=err.message}}}',
  'document.querySelector("[data-op=refresh]").onclick=refresh;',
@@ -114,9 +117,16 @@ export async function adminApp(req,sql,onApprove=null){
  }
  if(url.pathname==="/admin/action"&&req.method==="POST"){
   let data;try{data=await req.json()}catch{return json({error:"Некорректный запрос"},400)}
+  const action=String(data?.action||"");
+  if(action==="document_publish"){
+    try {
+      const document=await publishDocument(sql,String(data.slug||""),String(data.title||""),String(data.body||""));
+      await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,'document_publish',$1::jsonb)",JSON.stringify({slug:document.slug,version:document.version}));
+      return json({ok:true,document});
+    }catch(err){return json({error:String(err.message||err)},400)}
+  }
   const id=Number(data?.id);
   if(!Number.isSafeInteger(id))return json({error:"Некорректный ID"},400);
-  const action=String(data?.action||"");
   if(action==="source_add")await sql("INSERT INTO mm_sources(id,city,topic,active) VALUES($1,$2,$3,TRUE) ON CONFLICT(id) DO UPDATE SET city=EXCLUDED.city,topic=EXCLUDED.topic,active=TRUE",id,String(data.city||"").slice(0,90),String(data.topic||"").slice(0,90));
   else if(action==="source_off")await sql("UPDATE mm_sources SET active=FALSE WHERE id=$1",id);
   else if(action==="approve"){const jobs=await sql("UPDATE mm_jobs SET status='active' WHERE id=$1 AND status='pending' RETURNING *",id);if(jobs.length&&onApprove)await onApprove(jobs[0])}
