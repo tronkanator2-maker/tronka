@@ -12,6 +12,7 @@ test("exports only the requesting user's profile and related tables",async()=>{
  expect(archive.account.id).toBe(17);
  expect(archive.account.username).toBe("author");
  expect(archive.tickets).toEqual([]);
+ expect(calls.some(x=>x.q.includes("message,created_at FROM mm_responses"))).toBe(true);
  expect(calls.every(x=>x.args[0]===17)).toBe(true);
 });
 test("deletes dependent records before root account, never touches other users",async()=>{
@@ -24,6 +25,7 @@ test("deletes dependent records before root account, never touches other users",
  expect(asText).toContain("mm_trial_ledger");
  expect(asText).toContain("mm_response_outbox");
  expect(asText).toContain("mm_fanout_queue");
+ expect(asText).toContain("mm_relay_usage");
  expect(calls.at(-1).query).toContain("DELETE FROM mm_users WHERE id=$1");
  expect(calls.every(x=>x.args[0]===99)).toBe(true);
 });
