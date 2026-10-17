@@ -1,4 +1,5 @@
 import {SQL} from "bun";
+import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer} from "./profile-wizard.ts";
 import {isTestMode,canRegister,canUseTestFeatures,testWarning,testMenuText} from "./test-mode.ts";
 import {redactContacts,publicProfileEntries,publicProfileAllowed} from "./visibility.ts";
 import {adminApp} from "./admin.ts";
@@ -384,6 +385,47 @@ async function processResponseOutbox(){
  }finally{responseWorkerRunning=false}
 }
 
+async function promptWizard(u){
+ const role=u.filters?.wizardRole,step=Number(u.filters?.wizardStep||0);
+ const fields=wizardFields(role);
+ if(!role||!fields.length)return begin(u);
+ const item=wizardField(role,step);
+ if(!item)return finishWizard(u);
+ const total=fields.length;
+ const existing=u.profile?.[item.key];
+ return send(u.id,"✍️ <b>Анкета · шаг "+(step+1)+" из "+total+"</b>\n\n"+esc(item.label)+"\nПример: <code>"+esc(item.example)+"</code>"+(existing?"\nСейчас: "+esc(existing):"")+(testMode()&&item.key==="дата рождения"?"\n🧪 Укажите вымышленную дату.":""),buttons([
+  ...(item.required?[]:[[["⏭ Пропустить","wizard:skip"]]]),
+  [[["◀️ Назад","wizard:back"],["❌ Отменить","wizard:cancel"]]]
+ ]));
+}
+async function finishWizard(u){
+ const errors=validProfile(u.profile||{});
+ if(errors.length){
+  await change(u.id,{state:"profile"});
+  return send(u.id,"Анкета почти готова, но нужно исправить:\n• "+esc(errors.join("\n• "))+"\n\nПришлите недостающие поля текстом в формате «Название: значение».",buttons([[["✏️ Исправить вручную","edit_profile"]],[["◀️ В меню","home"]]]));
+ }
+ await change(u.id,{state:"profile_confirm"});
+ const summary=Object.entries(u.profile||{}).map(([key,value])=>esc(key)+": "+esc(value)).join("\n");
+ return send(u.id,"✅ <b>Анкета заполнена</b>\n\n"+summary+"\n\nТеперь сохраните анкету и добавьте главное фото.",buttons([[["✅ Сохранить анкету","profile_save"],["✏️ Исправить","edit_profile"]]]));
+}
+async function startWizard(u,role){
+ if(!WIZARD_ROLES.includes(role))return send(u.id,"Выберите профессию из списка.");
+ const profile={...(u.profile||{}),"кто вы":role};
+ const filters={...(u.filters||{}),wizardRole:role,wizardStep:0};
+ await change(u.id,{state:"wizard",profile,filters});
+ return promptWizard({...u,profile,filters});
+}
+async function acceptWizardText(u,txt){
+ const role=u.filters?.wizardRole,step=Number(u.filters?.wizardStep||0);
+ const item=wizardField(role,step),accepted=wizardAnswer(item,txt);
+ if(!accepted.ok)return send(u.id,"⚠️ "+esc(accepted.error));
+ const profile={...(u.profile||{}),[item.key]:accepted.value};
+ const filters={...(u.filters||{}),wizardStep:step+1};
+ await change(u.id,{profile,filters});
+ const current={...u,profile,filters};
+ return wizardCompleted(role,filters.wizardStep)?finishWizard(current):promptWizard(current);
+}
+
 async function submitResponse(u,body){
  const id=u.id,jobId=Number(u.filters?.replyJobId),message=String(body||"").trim();
  if(!Number.isSafeInteger(jobId)||jobId<=0)return send(id,"Черновик отклика больше не найден. Найдите заявку заново.");
@@ -471,7 +513,8 @@ if(m.photo?.length&&u.state==="photo"){
  if(photos.length>=5){await send(id,"Все пять фотографий сохранены ✅");const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await backfill(fresh);await profileBackfill(fresh);return begin(fresh)}
  return;
 }
-if(u.state==="reply_compose"){if(!t.trim())return send(id,"Отклик должен быть текстовым сообщением. Для отмены — /cancel.");return submitResponse(u,t)}
+if(u.state==="wizard"){if(m.photo?.length)return send(id,"Для фото будет отдельный шаг после заполнения анкеты. Сейчас отправьте ответ текстом.");return acceptWizardText(u,t)}
+ if(u.state==="reply_compose"){if(!t.trim())return send(id,"Отклик должен быть текстовым сообщением. Для отмены — /cancel.");return submitResponse(u,t)}
  if(u.state==="support"){if(m.photo?.length)return saveReport(u,m.caption||"Фото-доказательство",m.photo.at(-1).file_id);return saveReport(u,t)}
 if(u.state==="profile"){
  const input=m.caption||t;
@@ -556,7 +599,24 @@ if(a==="invitefriend"){
  return send(id,"🎁 Пригласите друга в «Мир моделей»!\nВаша ссылка: "+esc(link)+"\nПо ссылке пришли: "+count+"\nСкидки по реферальной программе заработают после подключения оплаты.");
 }
 if(a==="docs")return send(id,"Все опубликованные документы сервиса: "+esc((Bun.env.PUBLIC_URL||"").replace(/\/$/,"")+"/documents"));if(a==="go")return begin(u);
- if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))return begin(u);if(!testMode()&&(!u.phone||!u.username))return begin(u);if(a==="profile"){if(Object.keys(u.profile||{}).length)await profile(id,u,"Ваша анкета");return send(id,"Анкета редактируется одним текстовым сообщением.",buttons([[["✏️ Заполнить или изменить","edit_profile"],["📷 Добавить фото","addphoto"]]]))}if(a==="edit_profile"){if(Object.keys(u.profile||{}).length){await change(id,{state:"profile"});return send(id,"Чтобы изменить один пункт, пришлите его название и новое значение. Например:\n<code>Город: Москва, Казань</code>");}return send(id,"Выберите шаблон анкеты:",buttons([[["🎬 Модель / актёр","template_model"],["📸 Специалист / бренд","template_client"]]]))}
+ if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))return begin(u);if(!testMode()&&(!u.phone||!u.username))return begin(u);if(a==="profile"){if(Object.keys(u.profile||{}).length)await profile(id,u,"Ваша анкета");return send(id,"Выберите удобный способ заполнения. Можно отвечать на вопросы по одному, либо отправить шаблон одним сообщением.",buttons([[["🪄 Заполнить по шагам","profile_wizard"]],[["📝 Отправить шаблон","edit_profile"],["📷 Добавить фото","addphoto"]]]))}if(a==="profile_wizard")return send(id,"🪄 <b>Выберите направление</b>\nБот задаст короткие вопросы и соберёт анкету.",buttons([
+ ...Array.from({length:Math.ceil(WIZARD_ROLES.length/2)},(_,i)=>WIZARD_ROLES.slice(i*2,i*2+2).map((role,j)=>[role,"wizard:role:"+(i*2+j)]))
+ ]));
+ if(a.startsWith("wizard:role:")){
+  const role=WIZARD_ROLES[Number(a.slice("wizard:role:".length))];
+  return startWizard(u,role);
+ }
+ if(a==="wizard:cancel"){await change(id,{state:""});return begin({...u,state:""});}
+ if(a==="wizard:back"||a==="wizard:skip"){
+  if(u.state!=="wizard")return send(id,"Мастер заполнения завершён. Откройте анкету заново.");
+  const role=u.filters?.wizardRole,step=Number(u.filters?.wizardStep||0);
+  if(a==="wizard:skip"&&wizardField(role,step)?.required)return send(id,"Это обязательное поле.");
+  const filters={...(u.filters||{}),wizardStep:a==="wizard:back"?Math.max(0,step-1):step+1};
+  await change(id,{filters});
+  const next={...u,filters};
+  return wizardCompleted(role,filters.wizardStep)?finishWizard(next):promptWizard(next);
+ }
+ if(a==="edit_profile"){if(Object.keys(u.profile||{}).length){await change(id,{state:"profile"});return send(id,"Чтобы изменить один пункт, пришлите его название и новое значение. Например:\n<code>Город: Москва, Казань</code>");}return send(id,"Выберите шаблон анкеты:",buttons([[["🎬 Модель / актёр","template_model"],["📸 Специалист / бренд","template_client"]]]))}
 if(a==="template_model"||a==="template_client"){const role=a==="template_model"?"модель":"фотограф";await change(id,{state:"profile",profile:{...(u.profile||{}),"кто вы":role}});const tpl=a==="template_model"?profileTpl:clientTpl;return send(id,"Скопируйте шаблон, заполните и отправьте отдельным сообщением:\n<code>"+esc(tpl)+"</code>")}if(a==="profile_save"){if(u.state!=="profile_confirm")return send(id,"Сначала отправьте анкету и подтвердите актуальную версию.");await change(id,{state:""});if(u.photo){const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await profileBackfill(fresh);await backfill(fresh)}return send(id,"Анкета сохранена! Теперь добавьте ключевое фото.",buttons([[["📷 Добавить фото","addphoto"]]]))}if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправьте 1–5 фотографий: по одной или альбомом. Первая станет ключевой.",buttons([[["✅ Готово","photo_done"]]]))}if(a==="photo_done"){await change(id,{state:""});const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];if(fresh.photo){await backfill(fresh);await profileBackfill(fresh)}return send(id,fresh.photo?"Фото сохранены ✅":"Можно добавить фото позже, но для подбора нужно ключевое фото.",menu)}if(a==="new"){await change(id,{state:"job"});return send(id,"Скопируйте и заполните шаблон заявки одним сообщением:\n<code>"+esc(jobTpl)+"</code>")}if(a==="publish"){let p=u.filters?.draft;if(u.state!=="job_confirm"||!p)return send(id,"Сначала проверьте и подтвердите актуальную версию заявки.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].total)return send(id,"Без подписки можно разместить одну новую заявку с понедельника по воскресенье.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const row=(await sql("INSERT INTO mm_jobs(owner,body,expires_at) VALUES($1,$2::jsonb,$3) RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString()))[0];await change(id,{state:"",filters:Object.fromEntries(Object.entries(u.filters).filter(([k])=>k!=="draft"))});await send(id,"Заявка №"+row.id+" опубликована.");await dispatch(row);return}if(a==="jobs"){
  const js=await matchingJobs(u,30);
  if(!js.length)return send(id,eligibleProfile(u.profile,u.photo)?"По вашим фильтрам подходящих заявок сейчас нет.":"Добавьте ключевое фото и заполните обязательные поля анкеты, чтобы запустить подбор.",buttons([[["🎯 Фильтры","filters"],["👤 Анкета","profile"]]]));
