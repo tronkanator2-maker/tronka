@@ -1,7 +1,7 @@
 import {SQL} from "bun";
 import {adminApp} from "./admin.ts";
 import {parseWithModel} from "./ai-parser.ts";
-import {prepareDocuments,legalReady,recordConsent,publicDocumentRoute} from "./documents.ts";
+import {prepareDocuments,legalReady,recordConsent,publicDocumentRoute,latestDocuments} from "./documents.ts";
 import {prepareEntitlements,startPhoneTrial,hasPaidAccess,weekStartMoscow} from "./access.ts";
 import {setupFeedback, scheduleFeedback, feedbackTick, feedbackCallback, feedbackText, feedbackSummary} from "./feedback.ts";
 import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity, eligibleProfile, matchesCastingRequirements} from "./engine.ts";
@@ -9,7 +9,7 @@ const db=new SQL(Bun.env.DATABASE_URL||"postgres://unconfigured");
 const token=Bun.env.BOT_TOKEN||"", secret=Bun.env.WEBHOOK_SECRET||"";
 const admin=(Bun.env.ADMIN_IDS||"").split(",");
 const roles=ROLES;
-const menu={inline_keyboard:[[{text:"👤 Моя анкета",callback_data:"profile"},{text:"🎯 Фильтры",callback_data:"filters"}],[{text:"📢 Найти заявки",callback_data:"jobs"},{text:"➕ Разместить",callback_data:"new"}],[{text:"📌 Мои заявки",callback_data:"mine"},{text:"⏸️ Поиск вкл/выкл",callback_data:"pause"}],[{text:"🎁 Пригласить друга",callback_data:"invitefriend"},{text:"❓ Поддержка",callback_data:"support"}]]};
+const menu={inline_keyboard:[[{text:"👤 Моя анкета",callback_data:"profile"},{text:"🎯 Фильтры",callback_data:"filters"}],[{text:"📢 Найти заявки",callback_data:"jobs"},{text:"➕ Разместить",callback_data:"new"}],[{text:"📌 Мои заявки",callback_data:"mine"},{text:"⏸️ Поиск вкл/выкл",callback_data:"pause"}],[{text:"📚 Статьи",callback_data:"articles"}],[{text:"🎁 Пригласить друга",callback_data:"invitefriend"},{text:"❓ Поддержка",callback_data:"support"}]]};
 const esc=s=>String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
 async function sql(q,...v){return db.unsafe(q,v)}
 async function setup(){
@@ -207,7 +207,13 @@ if(u.state==="profile"){let p={...(u.profile||{}),...parse(t)},errors=validProfi
 if(u.state==="job"){let p=parse(t),errors=validJob(p);if(errors.length)return send(id,"Исправьте заявку:\n• "+esc(errors.join("\n• ")));await change(id,{filters:{...(u.filters||{}),draft:p},state:"job_confirm"});return send(id,"Предпросмотр:\n"+esc(t),buttons([[["✅ Опубликовать","publish"],["✏️ Исправить","new"]]]))}
 if(u.state==="filter"){let p=parse(t);await change(id,{filters:{city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});await send(id,"Фильтры сохранены. Подбираю актуальные заявки.",menu);const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await backfill(fresh);return showFilterMenu(fresh)}
 return begin(u)}
-async function onCallback(c){await call("answerCallbackQuery",{callback_query_id:c.id});let u=await who(c.from),id=u.id,a=c.data;if(a.startsWith("consent:")){if(!(await legalReady(sql)))return send(id,"Сначала должны быть опубликованы документы сервиса.");let n=+a.slice(8),co={...u.consent};if(n<0||n>2)return;co[n]=!co[n];co.version=Bun.env.DOC_VERSION||"draft";co[n+"_at"]=new Date().toISOString();await change(id,{consent:co});await recordConsent(sql,id,["offer","processing","distribution"][n],co[n]);return call("editMessageReplyMarkup",{chat_id:id,message_id:c.message.message_id,reply_markup:consentBoard({...u,consent:co})})}if(await feedbackCallback(a,id,sql,send))return;if(a==="invitefriend"){
+async function onCallback(c){await call("answerCallbackQuery",{callback_query_id:c.id});let u=await who(c.from),id=u.id,a=c.data;if(a.startsWith("consent:")){if(!(await legalReady(sql)))return send(id,"Сначала должны быть опубликованы документы сервиса.");let n=+a.slice(8),co={...u.consent};if(n<0||n>2)return;co[n]=!co[n];co.version=Bun.env.DOC_VERSION||"draft";co[n+"_at"]=new Date().toISOString();await change(id,{consent:co});await recordConsent(sql,id,["offer","processing","distribution"][n],co[n]);return call("editMessageReplyMarkup",{chat_id:id,message_id:c.message.message_id,reply_markup:consentBoard({...u,consent:co})})}if(await feedbackCallback(a,id,sql,send))return;if(a==="articles"){
+ const available=(await latestDocuments(sql)).filter(d=>["overview","safety","portfolio"].includes(d.slug));
+ if(!available.length)return send(id,"Статьи ещё готовятся. После утверждения владельцем они появятся здесь.");
+ const base=(Bun.env.PUBLIC_URL||"").replace(/\/$/,"");
+ return send(id,"📚 <b>Полезные статьи</b>\nВыберите тему:",{inline_keyboard:available.map(d=>[{text:d.title,url:base+"/documents/"+encodeURIComponent(d.slug)}])});
+}
+if(a==="invitefriend"){
  const name=(Bun.env.BOT_USERNAME||"world_mdbot").replace(/^@/,"");
  if(!name)return send(id,"Ссылка для приглашения пока недоступна.");
  const link="https://t.me/"+name+"?start=ref_"+id;
