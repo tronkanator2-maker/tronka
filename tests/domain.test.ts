@@ -62,3 +62,10 @@ test("erotic casting requires a separate 18+ opt-in",()=>{
  expect(isExplicitAdultCasting("Съёмка в нижнем белье для взрослых, lingerie")).toBe(true);
  expect(isExplicitAdultCasting("Спортивный мастер-класс на пляже")).toBe(false);
 });
+
+import {matchesWantedProfileRoles} from "../engine.ts";
+test("multiple requested professions are OR matched while empty selection allows all",()=>{
+ expect(matchesWantedProfileRoles(["фотограф","визажист"],"визажист, стилист")).toBe(true);
+ expect(matchesWantedProfileRoles(["фотограф","визажист"],"модель")).toBe(false);
+ expect(matchesWantedProfileRoles([],"модель")).toBe(true);
+});
