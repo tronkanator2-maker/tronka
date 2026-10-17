@@ -32,6 +32,11 @@ await sql("ALTER TABLE mm_users ADD COLUMN IF NOT EXISTS suspended BOOLEAN NOT N
 await sql("ALTER TABLE mm_users ADD COLUMN IF NOT EXISTS first_source TEXT");
 await sql("ALTER TABLE mm_users ADD COLUMN IF NOT EXISTS photos JSONB NOT NULL DEFAULT '[]'");
 await sql("CREATE INDEX IF NOT EXISTS mm_jobs_active_expiry ON mm_jobs(status,expires_at)");
+await sql("ALTER TABLE mm_reports_v2 ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'new'");
+await sql("ALTER TABLE mm_reports_v2 ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
+await sql("CREATE TABLE IF NOT EXISTS mm_support_messages(id BIGSERIAL PRIMARY KEY,ticket_id BIGINT NOT NULL REFERENCES mm_reports_v2(id),sender TEXT NOT NULL,body TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
+await sql("CREATE INDEX IF NOT EXISTS mm_support_message_ticket ON mm_support_messages(ticket_id,created_at)");
+
 await setupFeedback(sql);
 await prepareEntitlements(sql);
 await prepareDocuments(sql);
@@ -273,7 +278,8 @@ async function adminAction(u,t){
 async function saveReport(u,txt,photo=null){
  const meta=u.filters?.reportTarget||{};
  const target_user=meta.user||null, target_job=meta.job||null;
- await sql("INSERT INTO mm_reports_v2(reporter,target_user,target_job,kind,body,photo) VALUES($1,$2,$3,$4,$5,$6)",u.id,target_user,target_job,target_user||target_job?"complaint":"support",txt.slice(0,3000),photo);
+ const ticket=(await sql("INSERT INTO mm_reports_v2(reporter,target_user,target_job,kind,body,photo) VALUES($1,$2,$3,$4,$5,$6) RETURNING id",u.id,target_user,target_job,target_user||target_job?"complaint":"support",txt.slice(0,3000),photo))[0];
+ await sql("INSERT INTO mm_support_messages(ticket_id,sender,body) VALUES($1,'user',$2)",ticket.id,txt.slice(0,3000));
  const f={...(u.filters||{})};delete f.reportTarget;
  await change(u.id,{state:"",filters:f});
  if(target_user){
@@ -284,6 +290,14 @@ async function saveReport(u,txt,photo=null){
  await send(u.id,"Обращение записано. Модератор сможет его проверить.");
 }
 
-Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){await ensure();const documents=await publicDocumentRoute(r,sql);if(documents)return documents;const dashboard=await adminApp(r,sql,dispatch);if(dashboard)return dashboard;let u=new URL(r.url);if(u.pathname==="/health"){try{await ensure();return Response.json({ok:true,registration:Bun.env.REGISTRATION_ENABLED==="true"})}catch(e){return new Response("Database unavailable",{status:503})}}if(u.pathname==="/webhook"&&r.method==="POST"){if(!secret||r.headers.get("x-telegram-bot-api-secret-token")!==secret)return new Response("Forbidden",{status:403});try{await ensure();let x=await r.json();let ok=await sql("INSERT INTO mm_updates(id) VALUES($1) ON CONFLICT DO NOTHING RETURNING id",x.update_id);if(ok.length){if(x.message?.from||x.message?.chat?.type!=="private")if(x.message)await onMessage(x.message);if(x.channel_post)await onSourcePost(x.channel_post);if(x.callback_query?.from)await onCallback(x.callback_query)}return new Response("ok")}catch(e){console.error("Update error",e);return new Response("error",{status:500})}}return new Response("World Models Bot")}})
+Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){await ensure();const documents=await publicDocumentRoute(r,sql);if(documents)return documents;const dashboard=await adminApp(r,sql,dispatch,async (id,message)=>{
+ const reports=await sql("SELECT * FROM mm_reports_v2 WHERE id=$1",id);
+ if(!reports.length)throw Error("Обращение не найдено");
+ const target=reports[0].reporter;
+ const sent=await send(target,"✉️ Ответ поддержки «Мир моделей» по обращению №"+id+":\n\n"+esc(message));
+ if(!sent.ok)throw Error("Telegram не доставил ответ.");
+ await sql("INSERT INTO mm_support_messages(ticket_id,sender,body) VALUES($1,'support',$2)",id,message);
+ await sql("UPDATE mm_reports_v2 SET status='in_progress',updated_at=NOW() WHERE id=$1",id);
+});if(dashboard)return dashboard;let u=new URL(r.url);if(u.pathname==="/health"){try{await ensure();return Response.json({ok:true,registration:Bun.env.REGISTRATION_ENABLED==="true"})}catch(e){return new Response("Database unavailable",{status:503})}}if(u.pathname==="/webhook"&&r.method==="POST"){if(!secret||r.headers.get("x-telegram-bot-api-secret-token")!==secret)return new Response("Forbidden",{status:403});try{await ensure();let x=await r.json();let ok=await sql("INSERT INTO mm_updates(id) VALUES($1) ON CONFLICT DO NOTHING RETURNING id",x.update_id);if(ok.length){if(x.message?.from||x.message?.chat?.type!=="private")if(x.message)await onMessage(x.message);if(x.channel_post)await onSourcePost(x.channel_post);if(x.callback_query?.from)await onCallback(x.callback_query)}return new Response("ok")}catch(e){console.error("Update error",e);return new Response("error",{status:500})}}return new Response("World Models Bot")}})
 setInterval(()=>ensure().then(()=>feedbackTick(sql,send)).catch(e=>console.error("feedback job",String(e))),60*60*1000);
 if(token&&secret&&Bun.env.PUBLIC_URL)call("setWebhook",{url:Bun.env.PUBLIC_URL.replace(/\/$/,"")+"/webhook",secret_token:secret,allowed_updates:["message","channel_post","callback_query"]}).then(r=>console.log("Webhook configured",r.ok)).catch(console.error);
