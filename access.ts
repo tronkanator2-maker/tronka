@@ -31,8 +31,15 @@ export async function startPhoneTrial(sql,id,phone,pepper){
  const normalized=normalizePhone(phone);
  if(!normalized||!pepper)return {started:false,reason:"phone or environment not configured"};
  const fp=await fingerprint(normalized,pepper);
- const claimed=await sql("INSERT INTO mm_trial_ledger(fingerprint,first_user) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING first_user",fp,id);
- if(!claimed.length)return {started:false,reason:"trial already claimed"};
- const updated=await sql("UPDATE mm_users SET trial_until=NOW()+INTERVAL '15 days' WHERE id=$1 AND trial_until IS NULL RETURNING trial_until",id);
- return {started:!!updated.length,until:updated[0]?.trial_until||null};
+ // One SQL statement guarantees the phone claim and trial grant are atomic.
+ // A failed grant never consumes the user's one-time trial.
+ const updated=await sql(`WITH claimed AS (
+   INSERT INTO mm_trial_ledger(fingerprint,first_user)
+   VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING first_user
+ ), granted AS (
+   UPDATE mm_users SET trial_until=NOW()+INTERVAL '15 days'
+   WHERE id=$2 AND trial_until IS NULL AND EXISTS(SELECT 1 FROM claimed)
+   RETURNING trial_until
+ ) SELECT trial_until FROM granted`,fp,id);
+ return {started:updated.length>0,until:updated[0]?.trial_until||null,reason:updated.length?"":"trial already claimed"};
 }
