@@ -7,14 +7,31 @@ export const ROLES = [
   "кастинг-директор","режиссёр","продюсер","продакшн","модельное агентство",
   "ивент-агентство","бренд","ресторан","салон красоты","студия","другое"
 ];
-export const parseFields = text => {
-  const obj = {};
-  for (const raw of String(text||"").split(/\r?\n/)) {
-    const line = raw.trim();
-    const match = line.match(/^([^:：]{2,65})[:：]\s*(.+)$/);
-    if(match) obj[match[1].trim().toLowerCase()] = match[2].trim();
-  }
-  return obj;
+// Only documented template fields are accepted. Instructions copied with a template
+// must never be saved as free-form profile keys.
+const FIELD_ALIASES={
+ "псевдоним":"имя","имя":"имя","ник":"имя","кто вы":"кто вы",
+ "роль":"кто вы","направление":"кто вы","дата рождения":"дата рождения",
+ "город":"город","пол":"пол","рост":"рост","параметры":"параметры",
+ "размер одежды":"размер одежды","цвет волос":"цвет волос",
+ "длина волос":"длина волос","формат":"формат","прайс":"прайс",
+ "о себе":"о себе","портфолио":"портфолио",
+ "опыт и проекты":"опыт и проекты","гонорар для модели":"гонорар для модели",
+ "название заявки":"название заявки","кого ищу":"кого ищу",
+ "тип работы":"тип работы","требования":"требования",
+ "формат и оплата":"формат и оплата","дата съёмки":"дата съёмки",
+ "дата съемки":"дата съёмки","описание":"описание"
+};
+export const parseFields=text=>{
+ const result={};
+ for(const raw of String(text||"").split(/\r?\n/)){
+  const line=raw.trim(),match=line.match(/^([^:：]{2,65})[:：]\s*(.+)$/);
+  if(!match)continue;
+  const key=match[1].trim().toLowerCase().replace(/ё/g,"е");
+  const canonical=FIELD_ALIASES[key]||FIELD_ALIASES[match[1].trim().toLowerCase()];
+  if(canonical)result[canonical]=match[2].trim().slice(0,3500);
+ }
+ return result;
 };
 export const field = (p,key) => Object.entries(p||{}).find(([k])=>k.includes(key))?.[1]||"";
 export const parseDate = input => {
