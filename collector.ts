@@ -9,7 +9,7 @@ import {parseSourcePost,moderate,normalizePost,extractContact,isExplicitAdultCas
 const cfg={
  apiId:Number(Bun.env.TG_API_ID||0),apiHash:Bun.env.TG_API_HASH||"",
  session:Bun.env.TG_STRING_SESSION||"",db:Bun.env.DATABASE_URL||"",
- searchTerms:(Bun.env.COLLECTOR_SEARCH_TERMS||"кастинг Москва|ищу модель Москва|TFP Санкт-Петербург|визажист кастинг|актёр массовка|кастинги Минск|съёмка Алматы|кастинг Казань|промоутер Москва|фотограф ТФП").split("|").map(x=>x.trim()).filter(Boolean)
+ searchTerms:(Bun.env.COLLECTOR_SEARCH_TERMS||"tfp_moscow|AMA Models castings|MEDIAPRACTICE|Хостес поиск Москва|Ищу Фотографа Модель TFP Москва|кастинг Москва|ищу модель Москва|TFP Санкт-Петербург|визажист кастинг|актёр массовка|кастинги Минск|съёмка Алматы|кастинг Казань|промоутер Москва|фотограф ТФП").split("|").map(x=>x.trim()).filter(Boolean)
 };
 if(!cfg.apiId||!cfg.apiHash||!cfg.session||!cfg.db)throw Error("Collector disabled. Configure TG_API_ID, TG_API_HASH, TG_STRING_SESSION and DATABASE_URL.");
 const db=new SQL(cfg.db);
