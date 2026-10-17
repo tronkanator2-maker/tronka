@@ -83,7 +83,7 @@ async function currentDocumentHashes(){
 function consentBoard(u,hashes){let c=u.consent||{};
  const ok=i=>consentIsCurrent(c,hashes,i);
  return buttons([...consentNames.map((x,i)=>[[(ok(i)?"✅ ":"☐ ")+x,"consent:"+i]]),[["📄 Документы","docs"]],...([0,1,2].every(ok)?[[["Продолжить","go"]]]:[])])}
-async function begin(u){if(u.blocked)return send(u.id,"Аккаунт ограничен. /support");if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql)))return send(u.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации юридических документов и проверки интеграций. Пока можно посмотреть демонстрацию без регистрации.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));const hashes=await currentDocumentHashes();
+async function begin(u){if(u.blocked||u.suspended)return send(u.id,"Аккаунт ограничен. Вы можете написать /support или экспортировать данные через /mydata.");if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql)))return send(u.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации юридических документов и проверки интеграций. Пока можно посмотреть демонстрацию без регистрации.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));const hashes=await currentDocumentHashes();
  if(!allConsentsCurrent(u.consent,hashes))return send(u.id,"<b>Добро пожаловать в Мир моделей!</b>\nОзнакомьтесь с действующими документами и дайте три отдельных согласия.",consentBoard(u,hashes));if(!u.phone)return send(u.id,"Подтвердите ваш собственный номер через кнопку Telegram. Номер не будет опубликован.",{keyboard:[[{text:"📱 Поделиться номером",request_contact:true}]],resize_keyboard:true,one_time_keyboard:true});if(!u.username)return send(u.id,"Установите @имя пользователя в настройках Telegram, затем отправьте /start.");return send(u.id,"<b>✨ Мир моделей</b>\nВыберите раздел.",menu)}
 const parse=parseFields;
 const get=field;
@@ -271,7 +271,7 @@ async function browseProfiles(u,offset=0){
  const city=(u.filters?.profileCity||u.filters?.city||"").trim().toLowerCase();
  const profiles=await sql("SELECT * FROM mm_users WHERE id<>$1 AND blocked=FALSE AND suspended=FALSE AND active=TRUE AND photo IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 300",u.id);
  const publicProfiles=profiles.filter(p=>{
-  if(!allConsentsCurrent(p.consent,cachedDocHashes)||!eligibleProfile(p.profile,p.photo))return false;
+  if(!publicProfileAllowed(p,cachedDocHashes,allConsentsCurrent,eligibleProfile))return false;
   if(!matchesWantedProfileRoles(requested,get(p.profile,"кто вы")))return false;
   if(city&&!city.split(",").some(c=>get(p.profile,"город").toLowerCase().includes(c.trim())))return false;
   return true;
@@ -448,6 +448,7 @@ async function onCallback(c){
   await deleteAccount(sql,id);
   return send(id,"Ваш аккаунт и связанные с ним данные удалены из нашей базы. Для создания нового аккаунта используйте /start.");
  }
+ if((u.blocked||u.suspended)&&!["support","report"].includes(a)&&!a.startsWith("reportjob:")&&!a.startsWith("reportuser:"))return send(id,"Ваш аккаунт ограничен. Вы можете обратиться в поддержку, экспортировать или удалить данные.");
  if(a.startsWith("consent:")){
  if(!(await legalReady(sql)))return send(id,"Сначала должны быть опубликованы документы сервиса.");
  const n=Number(a.slice("consent:".length));if(!Number.isInteger(n)||n<0||n>2)return;
@@ -717,6 +718,7 @@ async function adminAction(u,t){
    const col=m[1].includes("block")?"blocked":"suspended";
    const flag=m[1]==="block"||m[1]==="suspend";
    await sql("UPDATE mm_users SET "+col+"=$1 WHERE id=$2",flag,Number(m[2]));
+    if(flag)await sql("UPDATE mm_jobs SET paused=TRUE WHERE owner=$1 AND status='active'",Number(m[2]));
    await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES($1,$2,$3::jsonb)",id,m[1],JSON.stringify({target:m[2]}));
    await send(id,"Изменён статус пользователя "+m[2]);
    return true;
