@@ -1,5 +1,6 @@
 import {SQL} from "bun";
 import {adminApp} from "./admin.ts";
+import {parseWithModel} from "./ai-parser.ts";
 import {prepareDocuments,legalReady,recordConsent,publicDocumentRoute} from "./documents.ts";
 import {prepareEntitlements,startPhoneTrial,hasPaidAccess,weekStartMoscow} from "./access.ts";
 import {setupFeedback, scheduleFeedback, feedbackTick, feedbackCallback, feedbackText, feedbackSummary} from "./feedback.ts";
@@ -245,10 +246,11 @@ async function onSourcePost(m) {
  const settings=(await sql("SELECT * FROM mm_sources WHERE id=$1 AND active=TRUE",sourceId))[0];
  if(!settings)return;
  const raw=(m.text||m.caption||"").slice(0,5000);
- const parsed=parseSourcePost(raw,{city:settings.city,topic:settings.topic});
- const decision=moderate(raw.replace(/(?:https?:\/\/)?t\.me\/[a-zA-Z0-9_]{5,32}/gi,""));
  const exists=await sql("SELECT 1 FROM mm_source_posts WHERE source_id=$1 AND telegram_message_id=$2",sourceId,m.message_id);
  if(exists.length)return;
+ const decision=moderate(raw.replace(/(?:https?:\/\/)?t\.me\/[a-zA-Z0-9_]{5,32}/gi,""));
+ // Rules always decide safety. AI is an optional extraction fallback only.
+ const parsed=parseSourcePost(raw,{city:settings.city,topic:settings.topic}) || (decision.status!=="reject" ? await parseWithModel(raw,{city:settings.city,topic:settings.topic}) : null);
  let state=decision.status==="reject"?"rejected":decision.status==="review"?"pending":"active";
  if(!parsed)state="rejected";
  if(parsed && /(?:несовершеннолет|до\s+1[0-7]\s+лет|дети\s+1[0-7]\s+лет)/i.test(raw))state="pending";
