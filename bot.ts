@@ -6,7 +6,7 @@ import {parseWithModel} from "./ai-parser.ts";
 import {prepareDocuments,legalReady,recordConsent,publicDocumentRoute,latestDocuments,documentHashes,allConsentsCurrent,consentIsCurrent} from "./documents.ts";
 import {prepareEntitlements,startPhoneTrial,hasPaidAccess,weekStartMoscow} from "./access.ts";
 import {setupFeedback, scheduleFeedback, feedbackTick, feedbackCallback, feedbackText, feedbackSummary} from "./feedback.ts";
-import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity, eligibleProfile, matchesCastingRequirements} from "./engine.ts";
+import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity, eligibleProfile, matchesCastingRequirements, isExplicitAdultCasting} from "./engine.ts";
 const db=new SQL(Bun.env.DATABASE_URL||"postgres://unconfigured");
 const token=Bun.env.BOT_TOKEN||"", secret=Bun.env.WEBHOOK_SECRET||"";
 const admin=(Bun.env.ADMIN_IDS||"").split(",");
@@ -112,6 +112,7 @@ async function matches(u,j){
  const p=u.profile;
  // Level 2 completion is validated by eligibleProfile above.
  if(!roleMatch(get(j.body,"кого ищу"),get(p,"кто вы")))return false;
+ if(isExplicitAdultCasting([get(j.body,"описание"),get(j.body,"требования"),get(j.body,"тип работы")].join(" ")) && !(u.filters?.adult===true && ageAt(get(p,"дата рождения"))>=18))return false;
  if(!matchesCastingRequirements(p,j.body))return false;
  if(u.filters?.city && get(j.body,"город")&&!u.filters.city.split(",").some(x=>get(j.body,"город").toLowerCase().includes(x.trim().toLowerCase())))return false;
  if(u.filters?.work && get(j.body,"тип работы")&&!u.filters.work.split(",").some(x=>get(j.body,"тип работы").toLowerCase().includes(x.trim().toLowerCase())))return false;
@@ -183,6 +184,7 @@ async function sendMatchedProfile(job,p){
  if(job.owner===p.id||job.owner===0||job.paused||job.status!=="active")return false;
  if(!p.active||p.blocked||p.suspended||!allConsentsCurrent(p.consent,await currentDocumentHashes())||!eligibleProfile(p.profile,p.photo))return false;
  if(!roleMatch(get(job.body,"кого ищу"),get(p.profile,"кто вы")))return false;
+ if(isExplicitAdultCasting([get(job.body,"описание"),get(job.body,"требования"),get(job.body,"тип работы")].join(" ")) && !(p.filters?.adult===true && ageAt(get(p.profile,"дата рождения"))>=18))return false;
  if(!matchesCastingRequirements(p.profile,job.body))return false;
  if(!payMatches(p.profile,job.body))return false;
  const city=get(job.body,"город").toLowerCase();
@@ -251,12 +253,13 @@ async function showFilterMenu(u){
  let notice="🎯 <b>Фильтры и поиск</b>\n\n";
  notice+="Город: "+esc(f.city||"все")+"\n";
  notice+="Тип работы: "+esc(f.work||"все")+"\n";
- notice+="Формат: "+esc(f.format||"все")+"\n\n";
+ notice+="Формат: "+esc(f.format||"все")+"\n";
+ notice+="Откровенные съёмки (18+): "+(f.adult===true?"включены":"выключены")+"\n\n";
  notice+="Подходящих актуальных заявок: <b>"+matched.length+"</b>";
  if(!matched.length)notice+="\nПока ничего не нашлось — можно изменить фильтры.";
  return send(u.id,notice,buttons([
   [["✏️ Изменить","editfilters"],["📢 Смотреть заявки"+(matched.length?" ("+matched.length+")":""),"jobs"]],
-  [[u.active?"⏸️ Остановить поиск заявок":"▶️ Возобновить поиск заявок","pause"]]
+  [[u.active?"⏸️ Остановить поиск заявок":"▶️ Возобновить поиск заявок","pause"]],[[(f.adult===true?"🔞 Выключить 18+":"🔞 Включить 18+"),"adult_toggle"]]
  ]));
 }
 async function backfill(u){const jobs=await sql("SELECT * FROM mm_jobs WHERE status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' ORDER BY created_at DESC LIMIT 100");for(const j of jobs)try{await deliverTo(u,j)}catch(e){console.error("backfill",String(e))}}
@@ -303,7 +306,7 @@ if(u.state==="browse_city"){
   const filters={...(u.filters||{}),profileCity:city};
   await change(id,{filters,state:""});return browseProfiles({...u,filters},0);
  }
- if(u.state==="filter"){let p=parse(t);await change(id,{filters:{city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});await send(id,"Фильтры сохранены. Подбираю актуальные заявки.",menu);const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await backfill(fresh);return showFilterMenu(fresh)}
+ if(u.state==="filter"){let p=parse(t);await change(id,{filters:{...(u.filters||{}),city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});await send(id,"Фильтры сохранены. Подбираю актуальные заявки.",menu);const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await backfill(fresh);return showFilterMenu(fresh)}
 return begin(u)}
 async function onCallback(c){await call("answerCallbackQuery",{callback_query_id:c.id});let u=await who(c.from),id=u.id,a=c.data;if(a==="privacy")return send(id,"🔐 <b>Данные и приватность</b>\nЭкспорт показывает сведения, сохранённые сервисом. Удаление аккаунта безвозвратное; ранее отправленные Telegram-сообщения других людей останутся.",buttons([[["📦 Экспорт данных","privacy:export"]],[["🗑 Удалить аккаунт","privacy:delete"]],[["◀️ В меню","home"]]]));
  if(a==="privacy:export"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Сведения ещё не сохранены.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Ошибка отправки файла.");return;}
@@ -357,6 +360,11 @@ if(a==="template_model"||a==="template_client"){await change(id,{state:"profile"
  if(a==="browse_roles")return chooseBrowseRole(u);
  if(a==="browse_city"){await change(id,{state:"browse_city"});return send(id,"Напишите город для каталога, например «Москва». Для сброса отправьте «все».");}
  if(a.startsWith("browse:"))return browseProfiles(u,Math.max(0,Math.min(297,Number(a.slice(7))||0)));
+ if(a==="adult_toggle"){
+  if(ageAt(get(u.profile,"дата рождения"))<18||ageAt(get(u.profile,"дата рождения"))===null)return send(id,"Категория 18+ доступна только совершеннолетним.");
+  const filters={...(u.filters||{}),adult:u.filters?.adult!==true};
+  await change(id,{filters});return showFilterMenu({...u,filters});
+ }
  if(a==="filters")return showFilterMenu(u);
 if(a==="editfilters"){await change(id,{state:"filter"});return send(id,"Отправьте фильтры отдельным сообщением:\n<code>Город: Москва\nТип работы: реклама\nФормат: коммерция</code>\nЕсли строку оставить пустой, ограничение по ней отключится.")}if(a==="pause"){await change(id,{active:!u.active});if(!u.active)await backfill({...u,active:true});return send(id,u.active?"Поиск приостановлен. Анкета скрыта.":"Поиск возобновлён.")}if(a==="reply:"+a.slice(6)&&a.startsWith("reply:")){let j=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND expires_at>NOW()",+a.slice(6)))[0];if(!j||j.paused)return send(id,"Поиск по заявке остановлен.");if(!u.photo)return send(id,"Сначала добавьте фото в анкету.");let n=await sql("SELECT count(*)::int AS n FROM mm_responses WHERE user_id=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].n)return send(id,"Бесплатный лимит — 1 отклик с понедельника по воскресенье.");let saved=await sql("INSERT INTO mm_responses(job_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING id",j.id,id);if(!saved.length)return send(id,"Отклик уже учтён.");const owner=j.owner===0?null:(await sql("SELECT * FROM mm_users WHERE id=$1",j.owner))[0];if(j.contact){const contact=String(j.contact).replace(/^@/,"");if(/^\w{5,32}$/.test(contact)){const draft="Здравствуйте! Ваша заявка «"+get(j.body,"название заявки")+"» пришла мне в боте Мир моделей. С радостью обсужу детали.";await send(id,"Откройте диалог с автором:",{inline_keyboard:[[{text:"✉️ Написать автору",url:"https://t.me/"+contact+"?text="+encodeURIComponent(draft)}]]});return}await send(id,"Контакт автора: "+esc(j.contact));return}if(owner?.username){const draft="Здравствуйте! Откликаюсь на заявку «"+get(j.body,"название заявки")+"». С радостью обсужу детали.";await send(id,"Для отправки откройте диалог:",{inline_keyboard:[[{text:"✉️ Написать автору",url:"https://t.me/"+owner.username+"?text="+encodeURIComponent(draft)}]]})}else await send(id,"Отклик учтён, но у автора нет доступного @ника.");if(owner){await send(owner.id,"Отклик на заявку №"+j.id);await profile(owner.id,u,"Анкета откликнувшегося");await send(owner.id,"Выберите действие:",buttons([[["✅ Принять отклик","acceptresponse:"+saved[0].id],["❌ Отклонить","declineresponse:"+saved[0].id]]]))}return}if(a.startsWith("invite:")){
  const target=Number(a.slice(7));
