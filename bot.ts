@@ -109,7 +109,11 @@ const parse=parseFields;
 const get=field;
 const profileTpl="Кто вы: модель\nИмя: Анна\nДата рождения: 12.09.2002\nГород: Москва\nПол: женский\nРост: 172\nРазмер одежды: 42\nЦвет волос: русый\nДлина волос: длинные\nФормат: коммерция, ТФП\nПрайс: 3000 ₽/час\nО себе: съёмки каталогов\nПортфолио: https://example.com";
 const clientTpl="Кто вы: фотограф\nИмя: Иван\nДата рождения: 05.03.1995\nГород: Москва\nОпыт и проекты: 4 года, снимал локальные бренды\nГонорар для модели: договорная\nО себе: снимаю каталог и лукбуки\nПортфолио: https://drive.google.com/...";
-const jobTpl="Название заявки: Съёмка каталога\nКого ищу: модель\nТип работы: каталог\nГород: Москва\nТребования: женщина 20-30 лет\nФормат и оплата: 5000 ₽ за смену\nДата съёмки: 25.10.2026\nОписание: каталог одежды, 4 часа";
+const jobTpl=()=>{
+ const day=new Date(Date.now()+14*86400000);
+ const date=[String(day.getUTCDate()).padStart(2,"0"),String(day.getUTCMonth()+1).padStart(2,"0"),day.getUTCFullYear()].join(".");
+ return "Название заявки: Съёмка каталога\nКого ищу: модель\nТип работы: каталог\nГород: Москва\nТребования: женщина 20-30 лет\nФормат и оплата: 5000 ₽ за смену\nДата съёмки: "+date+"\nОписание: каталог одежды, 4 часа";
+};
 const bad=/эскорт|порнограф|содержанк|интим.услуг|ню\b|топлес|эротик|бдсм|фетиш/i;
 function validProfile(p){
  const missing=["кто вы","имя","дата рождения","город"].filter(k=>!get(p,k));
@@ -149,7 +153,10 @@ async function profile(to,u,heading="Анкета"){
    (age!==null?"Возраст: "+age+"\n":"")+
    publicProfileEntries(u.profile).map(([k,v])=>esc(k)+": "+esc(v)).join("\n")+
    "\nКонтакты скрыты до принятого приглашения или отклика.\n\n"+reviews.text;
- return send(to,content,buttons([[["✉️ Пригласить","invite:"+u.id]],...(reviews.count?[[["⭐ Все отзывы ("+reviews.count+")","allreviews:"+u.id+":0"]]]:[]),[["⚠️ Пожаловаться","reportuser:"+u.id]]]));
+ const own=Number(to)===Number(u.id);
+ const rows=own?[[["✏️ Изменить","edit_profile"],["📷 Мои фото","addphoto"]]]:
+  [[["✉️ Пригласить","invite:"+u.id]],...(reviews.count?[[["⭐ Все отзывы ("+reviews.count+")","allreviews:"+u.id+":0"]]]:[]),[["⚠️ Пожаловаться","reportuser:"+u.id]]];
+ return send(to,content,buttons(rows));
 }
 async function card(to,j){
  const p=j.body||{},external=j.owner===0;
@@ -408,6 +415,19 @@ async function finishWizard(u){
  const summary=Object.entries(u.profile||{}).map(([key,value])=>esc(key)+": "+esc(value)).join("\n");
  return send(u.id,"✅ <b>Анкета заполнена</b>\n\n"+summary+"\n\nТеперь сохраните анкету и добавьте главное фото.",buttons([[["✅ Сохранить анкету","profile_save"],["✏️ Исправить","edit_profile"]]]));
 }
+async function showWizardRolePage(id,page=0){
+ const perPage=8,totalPages=Math.ceil(WIZARD_ROLES.length/perPage);
+ const current=Math.max(0,Math.min(totalPages-1,page));
+ const roles=WIZARD_ROLES.slice(current*perPage,(current+1)*perPage),rows=[];
+ for(let i=0;i<roles.length;i+=2)rows.push(roles.slice(i,i+2).map((role,offset)=>[role,"wizard:role:"+(current*perPage+i+offset)]));
+ const paging=[];
+ if(current>0)paging.push(["◀️ Назад","wizard:page:"+(current-1)]);
+ if(current<totalPages-1)paging.push(["Дальше ▶️","wizard:page:"+(current+1)]);
+ if(paging.length)rows.push(paging);
+ rows.push([["🏠 В меню","home"]]);
+ return send(id,"🪄 <b>Анкета · выберите профессию</b>\nСтраница "+(current+1)+" из "+totalPages+"\n\nЗатем бот задаст короткие вопросы. Большие шаблоны копировать не нужно.",buttons(rows));
+}
+
 async function startWizard(u,role){
  if(!WIZARD_ROLES.includes(role))return send(u.id,"Выберите профессию из списка.");
  const profile={...(u.profile||{}),"кто вы":role};
@@ -599,9 +619,11 @@ if(a==="invitefriend"){
  return send(id,"🎁 Пригласите друга в «Мир моделей»!\nВаша ссылка: "+esc(link)+"\nПо ссылке пришли: "+count+"\nСкидки по реферальной программе заработают после подключения оплаты.");
 }
 if(a==="docs")return send(id,"Все опубликованные документы сервиса: "+esc((Bun.env.PUBLIC_URL||"").replace(/\/$/,"")+"/documents"));if(a==="go")return begin(u);
- if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))return begin(u);if(!testMode()&&(!u.phone||!u.username))return begin(u);if(a==="profile"){if(Object.keys(u.profile||{}).length)await profile(id,u,"Ваша анкета");return send(id,"Выберите удобный способ заполнения. Можно отвечать на вопросы по одному, либо отправить шаблон одним сообщением.",buttons([[["🪄 Заполнить по шагам","profile_wizard"]],[["📝 Отправить шаблон","edit_profile"],["📷 Добавить фото","addphoto"]]]))}if(a==="profile_wizard")return send(id,"🪄 <b>Выберите направление</b>\nБот задаст короткие вопросы и соберёт анкету.",buttons([
- ...Array.from({length:Math.ceil(WIZARD_ROLES.length/2)},(_,i)=>WIZARD_ROLES.slice(i*2,i*2+2).map((role,j)=>[role,"wizard:role:"+(i*2+j)]))
- ]));
+ if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))return begin(u);if(!testMode()&&(!u.phone||!u.username))return begin(u);if(a==="profile"){if(Object.keys(u.profile||{}).length)await profile(id,u,"Ваша анкета");return send(id,"Выберите удобный способ заполнения. Можно отвечать на вопросы по одному, либо отправить шаблон одним сообщением.",buttons([[["🪄 Заполнить по шагам","profile_wizard"]],[["📝 Отправить шаблон","edit_profile"],["📷 Добавить фото","addphoto"]]]))}if(a==="profile_wizard")return showWizardRolePage(id,0);
+ if(a.startsWith("wizard:page:")){
+  const page=Number(a.slice("wizard:page:".length));
+  return showWizardRolePage(id,Number.isInteger(page)?page:0);
+ }
  if(a.startsWith("wizard:role:")){
   const role=WIZARD_ROLES[Number(a.slice("wizard:role:".length))];
   return startWizard(u,role);
@@ -617,7 +639,21 @@ if(a==="docs")return send(id,"Все опубликованные докумен
   return wizardCompleted(role,filters.wizardStep)?finishWizard(next):promptWizard(next);
  }
  if(a==="edit_profile"){if(Object.keys(u.profile||{}).length){await change(id,{state:"profile"});return send(id,"Чтобы изменить один пункт, пришлите его название и новое значение. Например:\n<code>Город: Москва, Казань</code>");}return send(id,"Выберите шаблон анкеты:",buttons([[["🎬 Модель / актёр","template_model"],["📸 Специалист / бренд","template_client"]]]))}
-if(a==="template_model"||a==="template_client"){const role=a==="template_model"?"модель":"фотограф";await change(id,{state:"profile",profile:{...(u.profile||{}),"кто вы":role}});const tpl=a==="template_model"?profileTpl:clientTpl;return send(id,"Скопируйте шаблон, заполните и отправьте отдельным сообщением:\n<code>"+esc(tpl)+"</code>")}if(a==="profile_save"){if(u.state!=="profile_confirm")return send(id,"Сначала отправьте анкету и подтвердите актуальную версию.");await change(id,{state:""});if(u.photo){const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await profileBackfill(fresh);await backfill(fresh)}return send(id,"Анкета сохранена! Теперь добавьте ключевое фото.",buttons([[["📷 Добавить фото","addphoto"]]]))}if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправьте 1–5 фотографий: по одной или альбомом. Первая станет ключевой.",buttons([[["✅ Готово","photo_done"]]]))}if(a==="photo_done"){await change(id,{state:""});const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];if(fresh.photo){await backfill(fresh);await profileBackfill(fresh)}return send(id,fresh.photo?"Фото сохранены ✅":"Можно добавить фото позже, но для подбора нужно ключевое фото.",menu)}if(a==="new"){await change(id,{state:"job"});return send(id,"Скопируйте и заполните шаблон заявки одним сообщением:\n<code>"+esc(jobTpl)+"</code>")}if(a==="publish"){let p=u.filters?.draft;if(u.state!=="job_confirm"||!p)return send(id,"Сначала проверьте и подтвердите актуальную версию заявки.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].total)return send(id,"Без подписки можно разместить одну новую заявку с понедельника по воскресенье.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const row=(await sql("INSERT INTO mm_jobs(owner,body,expires_at) VALUES($1,$2::jsonb,$3) RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString()))[0];await change(id,{state:"",filters:Object.fromEntries(Object.entries(u.filters).filter(([k])=>k!=="draft"))});await send(id,"Заявка №"+row.id+" опубликована.");await dispatch(row);return}if(a==="jobs"){
+if(a==="template_model"||a==="template_client"){const role=a==="template_model"?"модель":"фотограф";await change(id,{state:"profile",profile:{...(u.profile||{}),"кто вы":role}});const tpl=a==="template_model"?profileTpl:clientTpl;return send(id,"Скопируйте шаблон, заполните и отправьте отдельным сообщением:\n<code>"+esc(tpl)+"</code>")}if(a==="profile_save"){
+ if(u.state!=="profile_confirm")return send(id,"Сначала отправьте анкету и подтвердите актуальную версию.");
+ await change(id,{state:""});
+ if(u.photo){
+  const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];
+  await profileBackfill(fresh);await backfill(fresh);
+  return send(id,"✅ Анкета обновлена! Фото уже загружено, профиль участвует в подборе.",buttons([[["👤 Моя анкета","profile"],["🏠 В меню","home"]]]));
+ }
+ return send(id,"✅ Анкета сохранена! Остался последний шаг: добавьте главное фото, чтобы попасть в подбор.",buttons([[["📷 Загрузить фото","addphoto"],["🏠 Позже","home"]]]));
+}if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправьте 1–5 фотографий: по одной или альбомом. Первая станет ключевой.",buttons([[["✅ Готово","photo_done"]]]))}if(a==="photo_done"){
+ await change(id,{state:""});
+ const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];
+ if(fresh.photo){await backfill(fresh);await profileBackfill(fresh)}
+ return send(id,fresh.photo?"✅ Фото сохранены! Анкета готова к подбору, если все поля заполнены.":"Фото пока не добавлено. Вернуться к загрузке можно в любое время.",buttons([[["👤 Моя анкета","profile"],["🏠 В меню","home"]]]));
+}if(a==="new"){await change(id,{state:"job"});return send(id,"Скопируйте и заполните шаблон заявки одним сообщением:\n<code>"+esc(jobTpl())+"</code>")}if(a==="publish"){let p=u.filters?.draft;if(u.state!=="job_confirm"||!p)return send(id,"Сначала проверьте и подтвердите актуальную версию заявки.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].total)return send(id,"Без подписки можно разместить одну новую заявку с понедельника по воскресенье.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const row=(await sql("INSERT INTO mm_jobs(owner,body,expires_at) VALUES($1,$2::jsonb,$3) RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString()))[0];await change(id,{state:"",filters:Object.fromEntries(Object.entries(u.filters).filter(([k])=>k!=="draft"))});await send(id,"Заявка №"+row.id+" опубликована.");await dispatch(row);return}if(a==="jobs"){
  const js=await matchingJobs(u,30);
  if(!js.length)return send(id,eligibleProfile(u.profile,u.photo)?"По вашим фильтрам подходящих заявок сейчас нет.":"Добавьте ключевое фото и заполните обязательные поля анкеты, чтобы запустить подбор.",buttons([[["🎯 Фильтры","filters"],["👤 Анкета","profile"]]]));
  for(const j of js)await card(id,j);
