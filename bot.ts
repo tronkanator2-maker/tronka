@@ -592,4 +592,12 @@ setInterval(()=>ensure().then(async()=>{
  await sql("DELETE FROM mm_fanout_queue WHERE pending=FALSE AND completed_at<NOW()-INTERVAL '90 days'");
  }).catch(e=>console.error("maintenance",String(e))),24*60*60*1000);
 setTimeout(()=>runFanoutBatch().catch(e=>console.error("fanout startup",String(e))),4000);
-if(token&&secret&&Bun.env.PUBLIC_URL)call("setWebhook",{url:Bun.env.PUBLIC_URL.replace(/\/$/,"")+"/webhook",secret_token:secret,allowed_updates:["message","channel_post","callback_query"]}).then(r=>console.log("Webhook configured",r.ok)).catch(console.error);
+if(token&&secret&&Bun.env.PUBLIC_URL)(async()=>{
+ const me=await call("getMe",{});
+ if(!me.ok){console.error("Telegram token failed getMe validation");return}
+ const actual=String(me.result?.username||"").toLowerCase(),expected=String(Bun.env.BOT_USERNAME||"").replace(/^@/,"").toLowerCase();
+ console.log("Connected Telegram bot: @"+actual);
+ if(expected&&expected!==actual){console.error("BOT_USERNAME does not match the configured token; check Railway settings.");return}
+ const result=await call("setWebhook",{url:Bun.env.PUBLIC_URL.replace(/\/$/,"")+"/webhook",secret_token:secret,allowed_updates:["message","channel_post","callback_query"]});
+ console.log("Webhook configured",!!result.ok);
+})().catch(e=>console.error("Telegram setup",String(e)));
