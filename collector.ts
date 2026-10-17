@@ -19,7 +19,7 @@ const dateFrom=message=>{
  const raw=message?.date;
  return raw instanceof Date?raw:(typeof raw==="number"?new Date(raw*1000):new Date(raw||0));
 };
-const from30=new Date(Date.now()-30*86400000),from14=new Date(Date.now()-14*86400000);
+const daysAgo=n=>new Date(Date.now()-n*86400000);
 const titleOf=x=>String(x?.title||x?.username||"").slice(0,200);
 function topicOf(title){
  const t=String(title||"").toLowerCase();
@@ -50,7 +50,7 @@ async function evaluate(entity){
  try{
   // Traverse the entire 30-day time window; no fixed "last 100 messages" shortcut.
   for await(const msg of client.iterMessages(entity)){
-   const date=dateFrom(msg);if(date<from30)break;
+   const date=dateFrom(msg);if(date<daysAgo(30))break;
    if(!last||date>last)last=date;
    const raw=String(msg.message||"");if(!raw.trim())continue;
    total++;
@@ -63,7 +63,7 @@ async function evaluate(entity){
  let status="rejected",reason="";
  if(childRisk){status="needs_review";reason="Риск 18+ с участием несовершеннолетних";}
  else if(unique.size<3)reason="Меньше 3 уникальных заявок за 30 дней";
- else if(!last||last<from14)reason="Последнее сообщение старше 14 дней";
+ else if(!last||last<daysAgo(14))reason="Последнее сообщение старше 14 дней";
  else if(total>0&&stop/total>=.50)reason="50% и больше сообщений со стоп-словами";
  else status="active";
  await query("INSERT INTO mm_candidate_sources(id,username,title,status,reason,unique30,total30) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING",id,username,title,status,reason,unique.size,total);
@@ -98,7 +98,7 @@ async function ingestSinceCheckpoint(source){
  try{
   for await(const msg of client.iterMessages(peer)){
    const id=Number(msg.id);
-   if(id<=Number(latest)||dateFrom(msg)<from14)break;
+   if(id<=Number(latest)||dateFrom(msg)<daysAgo(14))break;
    newest=Math.max(newest,id);collected.push(msg);n++;
    // The lower bound is a date, not a fixed recent-message count.
   }
