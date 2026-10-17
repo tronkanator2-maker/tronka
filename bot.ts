@@ -1,7 +1,7 @@
 import {SQL} from "bun";
 import {adminApp} from "./admin.ts";
 import {parseWithModel} from "./ai-parser.ts";
-import {prepareDocuments,legalReady,recordConsent,publicDocumentRoute,latestDocuments} from "./documents.ts";
+import {prepareDocuments,legalReady,recordConsent,publicDocumentRoute,latestDocuments,documentHashes,allConsentsCurrent,consentIsCurrent} from "./documents.ts";
 import {prepareEntitlements,startPhoneTrial,hasPaidAccess,weekStartMoscow} from "./access.ts";
 import {setupFeedback, scheduleFeedback, feedbackTick, feedbackCallback, feedbackText, feedbackSummary} from "./feedback.ts";
 import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity, eligibleProfile, matchesCastingRequirements} from "./engine.ts";
@@ -58,8 +58,18 @@ const buttons=rows=>({inline_keyboard:rows.map(row=>row.map(([text,callback_data
 async function change(id,fields){let sets=[],vals=[];for(const [k,v] of Object.entries(fields)){vals.push(typeof v==="object"?JSON.stringify(v):v);sets.push(k+"=$"+vals.length+(typeof v==="object"?"::jsonb":""));}vals.push(id);await sql("UPDATE mm_users SET "+sets.join(",")+" WHERE id=$"+vals.length,...vals)}
 async function who(f){await sql("INSERT INTO mm_users(id,username,first_name) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name",f.id,f.username||null,f.first_name||"");return(await sql("SELECT * FROM mm_users WHERE id=$1",f.id))[0]}
 const consentNames=["Оферта и правила сервиса","Обработка персональных данных","Показ анкеты другим"];
-function consentBoard(u){let c=u.consent||{};return buttons([...consentNames.map((x,i)=>[[(c[i]?"✅ ":"☐ ")+x,"consent:"+i]]),[["📄 Документы","docs"]],...(consentNames.every((_,i)=>c[i])?[[["Продолжить","go"]]]:[])])}
-async function begin(u){if(u.blocked)return send(u.id,"Аккаунт ограничен. /support");if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql)))return send(u.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации юридических документов и проверки интеграций.");if(!consentNames.every((_,i)=>u.consent?.[i]))return send(u.id,"<b>Добро пожаловать в Мир моделей!</b>\nОзнакомьтесь с документами и дайте три отдельных согласия.",consentBoard(u));if(!u.phone)return send(u.id,"Подтвердите ваш собственный номер через кнопку Telegram. Номер не будет опубликован.",{keyboard:[[{text:"📱 Поделиться номером",request_contact:true}]],resize_keyboard:true,one_time_keyboard:true});if(!u.username)return send(u.id,"Установите @имя пользователя в настройках Telegram, затем отправьте /start.");return send(u.id,"<b>✨ Мир моделей</b>\nВыберите раздел.",menu)}
+let cachedDocHashes=null,cachedDocHashesUntil=0;
+async function currentDocumentHashes(){
+ if(cachedDocHashes && Date.now()<cachedDocHashesUntil)return cachedDocHashes;
+ const snapshot=await documentHashes(sql);
+ cachedDocHashes=snapshot.hashes;cachedDocHashesUntil=Date.now()+2500;
+ return cachedDocHashes;
+}
+function consentBoard(u,hashes){let c=u.consent||{};
+ const ok=i=>consentIsCurrent(c,hashes,i);
+ return buttons([...consentNames.map((x,i)=>[[(ok(i)?"✅ ":"☐ ")+x,"consent:"+i]]),[["📄 Документы","docs"]],...([0,1,2].every(ok)?[[["Продолжить","go"]]]:[])])}
+async function begin(u){if(u.blocked)return send(u.id,"Аккаунт ограничен. /support");if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql)))return send(u.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации юридических документов и проверки интеграций.");const hashes=await currentDocumentHashes();
+ if(!allConsentsCurrent(u.consent,hashes))return send(u.id,"<b>Добро пожаловать в Мир моделей!</b>\nОзнакомьтесь с действующими документами и дайте три отдельных согласия.",consentBoard(u,hashes));if(!u.phone)return send(u.id,"Подтвердите ваш собственный номер через кнопку Telegram. Номер не будет опубликован.",{keyboard:[[{text:"📱 Поделиться номером",request_contact:true}]],resize_keyboard:true,one_time_keyboard:true});if(!u.username)return send(u.id,"Установите @имя пользователя в настройках Telegram, затем отправьте /start.");return send(u.id,"<b>✨ Мир моделей</b>\nВыберите раздел.",menu)}
 const parse=parseFields;
 const get=field;
 const profileTpl="Кто вы: модель\nИмя: Анна\nДата рождения: 12.09.2002\nГород: Москва\nПол: женский\nРост: 172\nРазмер одежды: 42\nЦвет волос: русый\nДлина волос: длинные\nФормат: коммерция, ТФП\nПрайс: 3000 ₽/час\nО себе: съёмки каталогов\nПортфолио: https://example.com";
@@ -92,7 +102,7 @@ function validJob(p){
 async function profile(to,u,heading="Анкета"){if(!u.profile||!Object.keys(u.profile).length)return;const reviews=await feedbackSummary(u.id,sql); if((u.photos||[]).length>1)await call("sendMediaGroup",{chat_id:to,media:u.photos.slice(0,5).map(x=>({type:"photo",media:x}))});else if(u.photo)await call("sendPhoto",{chat_id:to,photo:u.photo});return send(to,"<b>"+esc(heading)+"</b>\n"+Object.entries(u.profile).filter(([k])=>!/дата рождения|телефон|telegram|instagram|фио/i.test(k)).map(([k,v])=>esc(k)+": "+esc(sourcePublicText(v))).join("\n")+"\nКонтакты скрыты.\n\n"+reviews.text,buttons([[["✉️ Пригласить","invite:"+u.id]],...(reviews.count?[[["⭐ Все отзывы ("+reviews.count+")","allreviews:"+u.id+":0"]]]:[]),[["⚠️ Пожаловаться","reportuser:"+u.id]]]))}
 async function card(to,j){let p=j.body;let lines=["<b>📢 "+esc(get(p,"название заявки"))+"</b>","Кого ищу: "+esc(get(p,"кого ищу")),"Тип работы: "+esc(get(p,"тип работы")),"Город: "+esc(get(p,"город")),"Требования: "+esc(get(p,"требования")||"не указано"),"Оплата: "+esc(get(p,"формат и оплата")),"Дата: "+esc(get(p,"дата съёмки")||"не указана"),"",esc(sourcePublicText(get(p,"описание")))];if(j.owner===0)lines.push("Заказчик не зарегистрирован в боте — анкеты и отзывов о нём пока нет.");return send(to,lines.join("\n"),buttons([[["✋ Откликнуться","reply:"+j.id]],[["⚠️ Пожаловаться","reportjob:"+j.id]]]))}
 async function matches(u,j){
- if(!u||u.blocked||u.suspended||!u.active||!eligibleProfile(u.profile,u.photo)||j.paused||j.status!=="active")return false;
+ if(!u||u.blocked||u.suspended||!u.active||!allConsentsCurrent(u.consent,await currentDocumentHashes())||!eligibleProfile(u.profile,u.photo)||j.paused||j.status!=="active")return false;
  const p=u.profile;
  // Level 2 completion is validated by eligibleProfile above.
  if(!roleMatch(get(j.body,"кого ищу"),get(p,"кто вы")))return false;
@@ -124,7 +134,7 @@ async function safetyOnce(u){
 async function dispatch(j){const users=await sql("SELECT * FROM mm_users WHERE blocked=FALSE AND suspended=FALSE AND active=TRUE AND photo IS NOT NULL AND id<>$1",j.owner);for(const u of users)try{await deliverTo(u,j)}catch(e){console.error("delivery",u.id,String(e))}}
 async function sendMatchedProfile(job,p){
  if(job.owner===p.id||job.owner===0||job.paused||job.status!=="active")return false;
- if(!p.active||p.blocked||p.suspended||!eligibleProfile(p.profile,p.photo))return false;
+ if(!p.active||p.blocked||p.suspended||!allConsentsCurrent(p.consent,await currentDocumentHashes())||!eligibleProfile(p.profile,p.photo))return false;
  if(!roleMatch(get(job.body,"кого ищу"),get(p.profile,"кто вы")))return false;
  if(!matchesCastingRequirements(p.profile,job.body))return false;
  const city=get(job.body,"город").toLowerCase();
@@ -145,7 +155,7 @@ async function matchingProfilesForJob(job){
  for(const p of people)try{await sendMatchedProfile(job,p)}catch(e){console.error("profile delivery",String(e))}
 }
 async function profileBackfill(p){
- if(!eligibleProfile(p.profile,p.photo))return;
+ if(!eligibleProfile(p.profile,p.photo)||!allConsentsCurrent(p.consent,await currentDocumentHashes()))return;
  const jobs=await sql("SELECT * FROM mm_jobs WHERE owner<>$1 AND owner<>0 AND status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' ORDER BY created_at DESC LIMIT 80",p.id);
  for(const j of jobs)try{await sendMatchedProfile(j,p)}catch(e){console.error("profile backfill",String(e))}
 }
@@ -192,7 +202,7 @@ async function onMessage(m){if(m.chat?.type&&m.chat.type!=="private"){await onSo
  }
  return begin(u);
 }if(t==="/support"){await change(id,{state:"support"});return send(id,"Опишите проблему одним сообщением.");}if(admin.includes(String(id))&&t==="/stats"){let a=await sql("SELECT (SELECT count(*) FROM mm_users)::int AS users,(SELECT count(*) FROM mm_jobs)::int AS jobs,(SELECT count(*) FROM mm_reports)::int AS reports");return send(id,JSON.stringify(a[0]));}if((u.blocked||u.suspended)&&u.state!=="support")return send(id,"Ваш профиль ограничен; напишите /support.");if(t&&!t.startsWith("/")&&await feedbackText(id,t,sql,send))return; if(m.contact){if(m.contact.user_id!==id)return send(id,"Поделитесь именно своим номером.");await change(id,{phone:m.contact.phone_number});const trial=await startPhoneTrial(sql,id,m.contact.phone_number,Bun.env.PHONE_HASH_PEPPER||secret);if(trial.started)await send(id,"🎁 Пробный период на 15 дней активирован.");await call("sendMessage",{chat_id:id,text:"Телефон подтверждён.",reply_markup:{remove_keyboard:true}});return begin({...u,phone:m.contact.phone_number})}
-if(Bun.env.REGISTRATION_ENABLED!=="true"&&u.state!=="support")return begin(u);
+if((Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))&&u.state!=="support")return begin(u);
 if(m.photo?.length&&u.state==="photo"){
  const file=m.photo[m.photo.length-1].file_id;
  const list=Array.isArray(u.photos)?u.photos:[];
@@ -207,7 +217,18 @@ if(u.state==="profile"){let p={...(u.profile||{}),...parse(t)},errors=validProfi
 if(u.state==="job"){let p=parse(t),errors=validJob(p);if(errors.length)return send(id,"Исправьте заявку:\n• "+esc(errors.join("\n• ")));await change(id,{filters:{...(u.filters||{}),draft:p},state:"job_confirm"});return send(id,"Предпросмотр:\n"+esc(t),buttons([[["✅ Опубликовать","publish"],["✏️ Исправить","new"]]]))}
 if(u.state==="filter"){let p=parse(t);await change(id,{filters:{city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});await send(id,"Фильтры сохранены. Подбираю актуальные заявки.",menu);const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await backfill(fresh);return showFilterMenu(fresh)}
 return begin(u)}
-async function onCallback(c){await call("answerCallbackQuery",{callback_query_id:c.id});let u=await who(c.from),id=u.id,a=c.data;if(a.startsWith("consent:")){if(!(await legalReady(sql)))return send(id,"Сначала должны быть опубликованы документы сервиса.");let n=+a.slice(8),co={...u.consent};if(n<0||n>2)return;co[n]=!co[n];co.version=Bun.env.DOC_VERSION||"draft";co[n+"_at"]=new Date().toISOString();await change(id,{consent:co});await recordConsent(sql,id,["offer","processing","distribution"][n],co[n]);return call("editMessageReplyMarkup",{chat_id:id,message_id:c.message.message_id,reply_markup:consentBoard({...u,consent:co})})}if(await feedbackCallback(a,id,sql,send))return;if(a==="articles"){
+async function onCallback(c){await call("answerCallbackQuery",{callback_query_id:c.id});let u=await who(c.from),id=u.id,a=c.data;if(a.startsWith("consent:")){
+ if(!(await legalReady(sql)))return send(id,"Сначала должны быть опубликованы документы сервиса.");
+ const n=Number(a.slice("consent:".length));if(!Number.isInteger(n)||n<0||n>2)return;
+ const hashes=await currentDocumentHashes(),co={...(u.consent||{})};
+ const current=consentIsCurrent(co,hashes,n);
+ co[n]=!current;co[n+"_at"]=co[n]?new Date().toISOString():null;
+ co[n+"_hashes"]=co[n]?{...hashes}:null;
+ // Persist both state and audit. Each historical event carries document versions and hashes.
+ await change(id,{consent:co});
+ await recordConsent(sql,id,["offer","processing","distribution"][n],co[n]);
+ return call("editMessageReplyMarkup",{chat_id:id,message_id:c.message.message_id,reply_markup:consentBoard({...u,consent:co},hashes)});
+}if(await feedbackCallback(a,id,sql,send))return;if(a==="articles"){
  const available=(await latestDocuments(sql)).filter(d=>["overview","safety","portfolio"].includes(d.slug));
  if(!available.length)return send(id,"Статьи ещё готовятся. После утверждения владельцем они появятся здесь.");
  const base=(Bun.env.PUBLIC_URL||"").replace(/\/$/,"");
@@ -220,7 +241,8 @@ if(a==="invitefriend"){
  const count=(await sql("SELECT COUNT(*)::int n FROM mm_referrals WHERE inviter=$1",id))[0].n;
  return send(id,"🎁 Пригласите друга в «Мир моделей»!\nВаша ссылка: "+esc(link)+"\nПо ссылке пришли: "+count+"\nСкидки по реферальной программе заработают после подключения оплаты.");
 }
-if(a==="docs")return send(id,"Все опубликованные документы сервиса: "+esc((Bun.env.PUBLIC_URL||"").replace(/\/$/,"")+"/documents"));if(a==="go")return begin(u);if(Bun.env.REGISTRATION_ENABLED!=="true")return begin(u);if(!u.phone||!u.username)return begin(u);if(a==="profile"){if(Object.keys(u.profile||{}).length)await profile(id,u,"Ваша анкета");return send(id,"Анкета редактируется одним текстовым сообщением.",buttons([[["✏️ Заполнить или изменить","edit_profile"],["📷 Добавить фото","addphoto"]]]))}if(a==="edit_profile"){if(Object.keys(u.profile||{}).length){await change(id,{state:"profile"});return send(id,"Чтобы изменить один пункт, пришлите его название и новое значение. Например:\n<code>Город: Москва, Казань</code>");}return send(id,"Выберите шаблон анкеты:",buttons([[["🎬 Модель / актёр","template_model"],["📸 Специалист / бренд","template_client"]]]))}
+if(a==="docs")return send(id,"Все опубликованные документы сервиса: "+esc((Bun.env.PUBLIC_URL||"").replace(/\/$/,"")+"/documents"));if(a==="go")return begin(u);
+ if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))return begin(u);if(!u.phone||!u.username)return begin(u);if(a==="profile"){if(Object.keys(u.profile||{}).length)await profile(id,u,"Ваша анкета");return send(id,"Анкета редактируется одним текстовым сообщением.",buttons([[["✏️ Заполнить или изменить","edit_profile"],["📷 Добавить фото","addphoto"]]]))}if(a==="edit_profile"){if(Object.keys(u.profile||{}).length){await change(id,{state:"profile"});return send(id,"Чтобы изменить один пункт, пришлите его название и новое значение. Например:\n<code>Город: Москва, Казань</code>");}return send(id,"Выберите шаблон анкеты:",buttons([[["🎬 Модель / актёр","template_model"],["📸 Специалист / бренд","template_client"]]]))}
 if(a==="template_model"||a==="template_client"){await change(id,{state:"profile"});const tpl=a==="template_model"?profileTpl:clientTpl;return send(id,"Скопируйте шаблон, заполните и отправьте отдельным сообщением:\n<code>"+esc(tpl)+"</code>")}if(a==="profile_save"){await change(id,{state:""});if(u.photo){const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await profileBackfill(fresh);await backfill(fresh)}return send(id,"Анкета сохранена! Теперь добавьте ключевое фото.",buttons([[["📷 Добавить фото","addphoto"]]]))}if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправьте 1–5 фотографий: по одной или альбомом. Первая станет ключевой.",buttons([[["✅ Готово","photo_done"]]]))}if(a==="photo_done"){await change(id,{state:""});const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];if(fresh.photo){await backfill(fresh);await profileBackfill(fresh)}return send(id,fresh.photo?"Фото сохранены ✅":"Можно добавить фото позже, но для подбора нужно ключевое фото.",menu)}if(a==="new"){await change(id,{state:"job"});return send(id,"Скопируйте и заполните шаблон заявки одним сообщением:\n<code>"+esc(jobTpl)+"</code>")}if(a==="publish"){let p=u.filters?.draft;if(!p)return send(id,"Черновик не найден.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].total)return send(id,"Без подписки можно разместить одну новую заявку с понедельника по воскресенье.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const row=(await sql("INSERT INTO mm_jobs(owner,body,expires_at) VALUES($1,$2::jsonb,$3) RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString()))[0];await change(id,{state:"",filters:Object.fromEntries(Object.entries(u.filters).filter(([k])=>k!=="draft"))});await send(id,"Заявка №"+row.id+" опубликована.");await dispatch(row);await matchingProfilesForJob(row);return}if(a==="jobs"){
  const js=await matchingJobs(u,30);
  if(!js.length)return send(id,eligibleProfile(u.profile,u.photo)?"По вашим фильтрам подходящих заявок сейчас нет.":"Добавьте ключевое фото и заполните обязательные поля анкеты, чтобы запустить подбор.",buttons([[["🎯 Фильтры","filters"],["👤 Анкета","profile"]]]));
