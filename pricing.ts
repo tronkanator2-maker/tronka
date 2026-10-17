@@ -26,7 +26,7 @@ export function parseMoney(value){
 }
 export function shiftHours(text){
  const src=nrm(text);
- const hours=src.match(/\b(\d{1,2})(?:[.,](\d))?\s*(?:час(?:ов|а)?|ч\.)\b/i);
+ const hours=src.match(/\b(\d{1,2})(?:[.,](\d))?\s*(?:час(?:ов|а)?|ч\.)(?=$|[^а-яёa-z])/i);
  if(hours){const n=Number(hours[1])+(hours[2]?Number("0."+hours[2]):0);return n>0&&n<=24?n:null}
  const schedule=src.match(/с\s*(\d{1,2})(?::(\d{2}))?\s*до\s*(\d{1,2})(?::(\d{2}))?/i);
  if(!schedule)return null;
