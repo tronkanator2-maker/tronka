@@ -1,5 +1,6 @@
 import {SQL} from "bun";
 import {adminApp} from "./admin.ts";
+import {payMatches,formatMatches} from "./pricing.ts";
 import {exportAccount,deleteAccount,sendAccountExport} from "./privacy.ts";
 import {parseWithModel} from "./ai-parser.ts";
 import {prepareDocuments,legalReady,recordConsent,publicDocumentRoute,latestDocuments,documentHashes,allConsentsCurrent,consentIsCurrent} from "./documents.ts";
@@ -112,9 +113,10 @@ async function matches(u,j){
  // Level 2 completion is validated by eligibleProfile above.
  if(!roleMatch(get(j.body,"кого ищу"),get(p,"кто вы")))return false;
  if(!matchesCastingRequirements(p,j.body))return false;
- if(u.filters?.city&&!u.filters.city.split(",").some(x=>get(j.body,"город").toLowerCase().includes(x.trim().toLowerCase())))return false;
- if(u.filters?.work&&!u.filters.work.split(",").some(x=>get(j.body,"тип работы").toLowerCase().includes(x.trim().toLowerCase())))return false;
- if(u.filters?.format&&!u.filters.format.split(",").some(x=>get(j.body,"формат и оплата").toLowerCase().includes(x.trim().toLowerCase())))return false;
+ if(u.filters?.city && get(j.body,"город")&&!u.filters.city.split(",").some(x=>get(j.body,"город").toLowerCase().includes(x.trim().toLowerCase())))return false;
+ if(u.filters?.work && get(j.body,"тип работы")&&!u.filters.work.split(",").some(x=>get(j.body,"тип работы").toLowerCase().includes(x.trim().toLowerCase())))return false;
+ if(!formatMatches(u.filters?.format,get(j.body,"формат и оплата")))return false;
+ if(!payMatches(u.profile,j.body))return false;
  return true;
 }
 async function deliverTo(u,j){
@@ -182,6 +184,7 @@ async function sendMatchedProfile(job,p){
  if(!p.active||p.blocked||p.suspended||!allConsentsCurrent(p.consent,await currentDocumentHashes())||!eligibleProfile(p.profile,p.photo))return false;
  if(!roleMatch(get(job.body,"кого ищу"),get(p.profile,"кто вы")))return false;
  if(!matchesCastingRequirements(p.profile,job.body))return false;
+ if(!payMatches(p.profile,job.body))return false;
  const city=get(job.body,"город").toLowerCase();
  if(city&&get(p.profile,"город")&&!get(p.profile,"город").toLowerCase().split(",").some(x=>city.includes(x.trim())))return false;
  const inserted=await sql("INSERT INTO mm_profile_deliveries(job_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING user_id",job.id,p.id);
