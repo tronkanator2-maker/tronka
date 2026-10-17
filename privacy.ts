@@ -5,7 +5,7 @@ export async function exportAccount(sql,id){
  if(!user)return null;
  const [jobs,responses,invitations,reviews,tickets,consents]=await Promise.all([
   sql("SELECT id,body,status,created_at,expires_at FROM mm_jobs WHERE owner=$1 ORDER BY id",id),
-  sql("SELECT id,job_id,status,created_at FROM mm_responses WHERE user_id=$1 ORDER BY id",id),
+  sql("SELECT id,job_id,status,message,created_at FROM mm_responses WHERE user_id=$1 ORDER BY id",id),
   sql("SELECT id,from_user,to_user,status,created_at FROM mm_invitations WHERE from_user=$1 OR to_user=$1 ORDER BY id",id),
   sql("SELECT id,author,target,score,shoot_status,body,answer,created_at FROM mm_reviews WHERE author=$1 OR target=$1 ORDER BY id",id),
   sql("SELECT id,reporter,target_user,target_job,kind,status,body,created_at FROM mm_reports_v2 WHERE reporter=$1 ORDER BY id",id),
@@ -31,6 +31,7 @@ export async function deleteAccount(sql,id){
  await sql("DELETE FROM mm_invitations WHERE from_user=$1 OR to_user=$1",id);
  await sql("DELETE FROM mm_referrals WHERE inviter=$1 OR invitee=$1",id);
  await sql("DELETE FROM mm_trial_ledger WHERE first_user=$1",id);
+ await sql("DELETE FROM mm_relay_usage WHERE user_id=$1",id);
  await sql("DELETE FROM mm_admin_log WHERE actor=$1 OR details->>\'target\'=$2",id,String(id));
  await sql("DELETE FROM mm_profile_deliveries WHERE user_id=$1 OR job_id IN (SELECT id FROM mm_jobs WHERE owner=$1)",id);
  await sql("DELETE FROM mm_deliveries WHERE user_id=$1 OR job_id IN (SELECT id FROM mm_jobs WHERE owner=$1)",id);
