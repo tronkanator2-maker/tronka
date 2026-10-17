@@ -831,10 +831,12 @@ if(a.startsWith("acceptinvite:")){
   return send(id,"Отправитель больше недоступен.");
  }
  await scheduleFeedback(sql,"invite",rows[0].id,rows[0].from_user,rows[0].to_user);
- const receivingUser=u.username?{inline_keyboard:[[{text:"✉️ Написать получателю",url:"https://t.me/"+u.username}]]}:undefined;
- await send(rows[0].from_user,"✅ Ваше приглашение принято! Теперь можно связаться напрямую.",receivingUser);
- if(sender.username)return send(id,"✅ Приглашение принято. Теперь контакты доступны обеим сторонам.",{inline_keyboard:[[{text:"✉️ Написать приглашающему",url:"https://t.me/"+sender.username}]]});
- return send(id,"✅ Приглашение принято. У отправителя нет Telegram-имени пользователя.");
+ const peerButtons=[{text:"💬 Написать через бота",callback_data:"relay:"+rows[0].to_user}];
+ if(u.username)peerButtons.unshift({text:"✉️ Открыть Telegram",url:"https://t.me/"+u.username});
+ await send(rows[0].from_user,"✅ Ваше приглашение принято! Можно обсудить детали напрямую или через бота.",{inline_keyboard:[peerButtons]});
+ const senderButtons=[{text:"💬 Написать через бота",callback_data:"relay:"+rows[0].from_user}];
+ if(sender.username)senderButtons.unshift({text:"✉️ Открыть Telegram",url:"https://t.me/"+sender.username});
+ return send(id,"✅ Приглашение принято. Теперь можно связаться с партнёром.",{inline_keyboard:[senderButtons]});
 }
 if(a.startsWith("acceptresponse:")){
  const rId=Number(a.slice("acceptresponse:".length));
@@ -844,8 +846,12 @@ if(a.startsWith("acceptresponse:")){
  await scheduleFeedback(sql,"response",rows[0].id,id,rows[0].user_id,get(j.body,"дата съёмки"));
  const applicant=(await sql("SELECT username FROM mm_users WHERE id=$1",rows[0].user_id))[0];
  const client=(await sql("SELECT username FROM mm_users WHERE id=$1",id))[0];
- await send(id,"✅ Отклик принят. Теперь можно обсудить детали напрямую.",applicant?.username?{inline_keyboard:[[{text:"✉️ Написать откликнувшемуся",url:"https://t.me/"+applicant.username}]]}:undefined);
- await send(rows[0].user_id,"✅ Ваш отклик принят! Можно согласовать детали напрямую.",client?.username?{inline_keyboard:[[{text:"✉️ Написать заказчику",url:"https://t.me/"+client.username}]]}:undefined);
+ const applicantButtons=[{text:"💬 Через бота",callback_data:"relay:"+rows[0].user_id}];
+ if(applicant?.username)applicantButtons.unshift({text:"✉️ В Telegram",url:"https://t.me/"+applicant.username});
+ await send(id,"✅ Отклик принят. Вы можете связаться с участником:",{inline_keyboard:[applicantButtons]});
+ const clientButtons=[{text:"💬 Через бота",callback_data:"relay:"+id}];
+ if(client?.username)clientButtons.unshift({text:"✉️ В Telegram",url:"https://t.me/"+client.username});
+ await send(rows[0].user_id,"✅ Ваш отклик принят! Теперь можно обсудить детали.",{inline_keyboard:[clientButtons]});
  return;
 }
 if(a.startsWith("declineresponse:")){
