@@ -143,3 +143,19 @@ export function roleMatch(want,roleText){
   return own.some(r=>r&&a.split(/[,;/]/).some(x=>x.trim()===r ||
     ((r==="актёр"||r==="модель")&&/^модел[ьиья]?$/i.test(x.trim()))));
 }
+
+
+export function eligibleProfile(profile,hasKeyPhoto){
+ const p=profile||{};
+ if(!hasKeyPhoto)return false;
+ const required=["кто вы","имя","дата рождения","город"];
+ if(required.some(k=>!field(p,k)))return false;
+ const years=ageAt(field(p,"дата рождения"));
+ if(years===null||years<18||years>110)return false;
+ const roles=field(p,"кто вы").toLowerCase().split(",").map(x=>x.trim());
+ if(roles.some(x=>MODEL_ROLES.includes(x))){
+  return ["пол","рост","размер одежды","цвет волос","длина волос","формат","прайс"].every(k=>!!field(p,k));
+ }
+ if(roles.some(x=>/фотограф|видеограф|визажист|стилист|бьюти-мастер/.test(x)))return !!field(p,"портфолио");
+ return true;
+}
