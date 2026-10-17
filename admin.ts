@@ -52,9 +52,9 @@ const appHtml = [
  '<section class="panel" id="login"><h2>Вход</h2><form id="form"><input name="password" placeholder="Пароль" type="password" required><input name="otp" placeholder="Код 2FA" inputmode="numeric" maxlength="6" required><button>Войти</button></form></section>',
  '<section id="dashboard" style="display:none"><div class="panel"><button data-op="refresh">Обновить</button><button data-op="logout">Выйти</button><p id="counters"></p></div>',
  '<div class="panel"><h2>Источники Telegram</h2><form id="source"><input name="id" placeholder="-100... ID источника" required><input name="city" placeholder="Город"><input name="topic" placeholder="Тема"><button>Добавить / включить</button></form><pre id="sources"></pre></div>',
- '<div class="panel"><h2>Модерация</h2><pre id="pending"></pre></div>',
+ '<div class="panel"><h2>Модерация</h2><form id="decision"><input name="id" placeholder="№ заявки" required><select name="action"><option value="approve">Одобрить</option><option value="reject">Отклонить</option></select><button>Применить</button></form><pre id="pending"></pre></div>',
  '<div class="panel"><h2>Обращения</h2><pre id="reports"></pre></div>',
- '<div class="panel"><h2>Пользователи</h2><pre id="users"></pre></div></section><p id="msg"></p>',
+ '<div class="panel"><h2>Пользователи</h2><form id="usersForm"><input name="id" placeholder="Telegram ID" required><select name="action"><option value="block">Заблокировать</option><option value="unblock">Разблокировать</option></select><button>Применить</button></form><pre id="users"></pre></div></section><p id="msg"></p>',
  '<script>',
  'const $=x=>document.getElementById(x);',
  'async function api(path,body){const r=await fetch("/admin/"+path,{method:body?"POST":"GET",headers:{"content-type":"application/json"},body:body?JSON.stringify(body):undefined,credentials:"same-origin"});const d=await r.json();if(!r.ok)throw Error(d.error||"Ошибка");return d}',
@@ -62,11 +62,12 @@ const appHtml = [
  'async function refresh(){try{const d=await api("data");$("login").style.display="none";$("dashboard").style.display="block";view("counters",d.stats);view("sources",d.sources);view("pending",d.pending);view("reports",d.reports);view("users",d.users);$("msg").textContent=""}catch(e){$("dashboard").style.display="none";$("login").style.display="block";$("msg").textContent=e.message}}',
  '$("form").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("login",{password:f.get("password"),otp:f.get("otp")});e.target.reset();refresh()}catch(err){$("msg").textContent=err.message}};',
  '$("source").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:"source_add",id:f.get("id"),city:f.get("city"),topic:f.get("topic")});refresh()}catch(err){$("msg").textContent=err.message}};',
+ 'for(const formId of ["decision","usersForm"]){$(formId).onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:f.get("action"),id:f.get("id")});refresh()}catch(err){$("msg").textContent=err.message}}}',
  'document.querySelector("[data-op=refresh]").onclick=refresh;',
  'document.querySelector("[data-op=logout]").onclick=async()=>{await api("logout",{});refresh()};',
  'refresh();</script></main></body></html>'
 ].join("");
-export async function adminApp(req,sql){
+export async function adminApp(req,sql,onApprove=null){
  const url=new URL(req.url);
  if(!url.pathname.startsWith("/admin"))return null;
  const enabled=!!Bun.env.ADMIN_PASSWORD&&!!Bun.env.ADMIN_TOTP_SECRET;
@@ -118,7 +119,7 @@ export async function adminApp(req,sql){
   const action=String(data?.action||"");
   if(action==="source_add")await sql("INSERT INTO mm_sources(id,city,topic,active) VALUES($1,$2,$3,TRUE) ON CONFLICT(id) DO UPDATE SET city=EXCLUDED.city,topic=EXCLUDED.topic,active=TRUE",id,String(data.city||"").slice(0,90),String(data.topic||"").slice(0,90));
   else if(action==="source_off")await sql("UPDATE mm_sources SET active=FALSE WHERE id=$1",id);
-  else if(action==="approve")await sql("UPDATE mm_jobs SET status='active' WHERE id=$1 AND status='pending'",id);
+  else if(action==="approve"){const jobs=await sql("UPDATE mm_jobs SET status='active' WHERE id=$1 AND status='pending' RETURNING *",id);if(jobs.length&&onApprove)await onApprove(jobs[0])}
   else if(action==="reject")await sql("UPDATE mm_jobs SET status='rejected' WHERE id=$1 AND status='pending'",id);
   else if(action==="block")await sql("UPDATE mm_users SET blocked=TRUE WHERE id=$1",id);
   else if(action==="unblock")await sql("UPDATE mm_users SET blocked=FALSE,suspended=FALSE WHERE id=$1",id);
