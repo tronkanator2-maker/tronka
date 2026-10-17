@@ -524,28 +524,52 @@ if(a==="editfilters"){await change(id,{state:"filter"});return send(id,"Отпр
 }
 if(a.startsWith("invite:")){
  const target=Number(a.slice(7));
- if(target===id)return send(id,"Нельзя пригласить самого себя.");
- if(!u.photo||!get(u.profile,"имя"))return send(id,"Сначала заполните анкету и добавьте ключевое фото.");
- const p=(await sql("SELECT * FROM mm_users WHERE id=$1 AND blocked=FALSE AND suspended=FALSE AND active=TRUE",target))[0];
- if(!p?.username)return send(id,"Участник временно не принимает приглашения.");
+ if(!Number.isSafeInteger(target)||target<=0||target===id)return send(id,"Некорректный получатель приглашения.");
+ const hashes=await currentDocumentHashes();
+ if(!publicProfileAllowed(u,hashes,allConsentsCurrent,eligibleProfile))return send(id,"Чтобы отправлять приглашения, сначала завершите анкету и добавьте главное фото.");
+ const p=(await sql("SELECT * FROM mm_users WHERE id=$1",target))[0];
+ if(!publicProfileAllowed(p,hashes,allConsentsCurrent,eligibleProfile)||!p.username)return send(id,"Этот участник сейчас недоступен для приглашений.");
+ const duplicate=(await sql("SELECT id FROM mm_invitations WHERE from_user=$1 AND to_user=$2 AND status IN ('sent','accepted') ORDER BY id DESC LIMIT 1",id,target))[0];
+ if(duplicate)return send(id,"Вы уже отправляли приглашение этому участнику.");
  const count=await sql("SELECT COUNT(*)::int n FROM mm_invitations WHERE from_user=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());
  if(!hasPaidAccess(u)&&count[0].n>=1)return send(id,"Без подписки доступно одно приглашение с понедельника по воскресенье.");
- const invited=(await sql("INSERT INTO mm_invitations(from_user,to_user) VALUES($1,$2) RETURNING id",id,p.id))[0];
- const draft="Здравствуйте! Приглашаю вас обсудить съёмку через «Мир моделей». С радостью обсужу детали.";
- await send(id,"Приглашение зарегистрировано.",{inline_keyboard:[[{text:"✉️ Написать участнику",url:"https://t.me/"+p.username+"?text="+encodeURIComponent(draft)}]]});
- await send(p.id,"👋 Вам пришло приглашение.");
- await profile(p.id,u,"Приглашающий участник");
- await send(p.id,"Приглашение можно принять или оставить без ответа.",buttons([[["✅ Принять","acceptinvite:"+invited.id],["Пока нет","home"]]]));
+ const invited=(await sql("INSERT INTO mm_invitations(from_user,to_user) VALUES($1,$2) RETURNING id",id,target))[0];
+ try{
+  const notification=await send(p.id,"👋 Вам пришло приглашение на сотрудничество.");
+  if(!notification?.ok)throw Error("Telegram could not deliver invitation");
+  await profile(p.id,u,"Анкета приглашающего участника");
+  const controls=await send(p.id,"Вы можете принять приглашение или отказаться. До принятия контакты обеих сторон скрыты.",buttons([[["✅ Принять","acceptinvite:"+invited.id],["❌ Отклонить","rejectinvite:"+invited.id]]]));
+  if(!controls?.ok)throw Error("Telegram could not deliver invitation controls");
+ }catch(err){
+  await sql("DELETE FROM mm_invitations WHERE id=$1 AND status='sent'",invited.id);
+  console.error("Invitation delivery failed",String(err));
+  return send(id,"Не получилось доставить приглашение. Попробуйте позже.");
+ }
+ await send(id,"✅ Приглашение отправлено. Контакты откроются обеим сторонам после принятия.");
  await safetyOnce(p);
+ return;
+}
+if(a.startsWith("rejectinvite:")){
+ const invitationId=Number(a.slice("rejectinvite:".length));
+ const rows=await sql("UPDATE mm_invitations SET status='declined' WHERE id=$1 AND to_user=$2 AND status='sent' RETURNING from_user",invitationId,id);
+ if(!rows.length)return send(id,"Приглашение уже обработано.");
+ await send(id,"Приглашение отклонено. Контакты не раскрывались.");
+ await send(rows[0].from_user,"Приглашение было отклонено.");
  return;
 }
 if(a.startsWith("acceptinvite:")){
  const rows=await sql("UPDATE mm_invitations SET status='accepted' WHERE id=$1 AND to_user=$2 AND status='sent' RETURNING *",Number(a.slice(13)),id);
- if(!rows.length)return send(id,"Приглашение уже обработано.");await scheduleFeedback(sql,"invite",rows[0].id,rows[0].from_user,rows[0].to_user);
- const from=(await sql("SELECT username FROM mm_users WHERE id=$1",rows[0].from_user))[0];
- await send(rows[0].from_user,"Ваше приглашение принято. Можно связаться напрямую.");
- if(from?.username)return send(id,"Откройте диалог:",{inline_keyboard:[[{text:"✉️ Написать",url:"https://t.me/"+from.username}]]});
- return send(id,"Приглашение принято.");
+ if(!rows.length)return send(id,"Приглашение уже обработано.");
+ const sender=(await sql("SELECT username,blocked,suspended FROM mm_users WHERE id=$1",rows[0].from_user))[0];
+ if(!sender||sender.blocked||sender.suspended){
+  await sql("UPDATE mm_invitations SET status='declined' WHERE id=$1",rows[0].id);
+  return send(id,"Отправитель больше недоступен.");
+ }
+ await scheduleFeedback(sql,"invite",rows[0].id,rows[0].from_user,rows[0].to_user);
+ const receivingUser=u.username?{inline_keyboard:[[{text:"✉️ Написать получателю",url:"https://t.me/"+u.username}]]}:undefined;
+ await send(rows[0].from_user,"✅ Ваше приглашение принято! Теперь можно связаться напрямую.",receivingUser);
+ if(sender.username)return send(id,"✅ Приглашение принято. Теперь контакты доступны обеим сторонам.",{inline_keyboard:[[{text:"✉️ Написать приглашающему",url:"https://t.me/"+sender.username}]]});
+ return send(id,"✅ Приглашение принято. У отправителя нет Telegram-имени пользователя.");
 }
 if(a.startsWith("acceptresponse:")){
  const rId=Number(a.slice("acceptresponse:".length));
