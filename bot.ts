@@ -499,6 +499,11 @@ async function onMessage(m){
  if(text.startsWith("/start")&&(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql)))){
   return send(m.from.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации документов и проверки интеграций. Пока можно посмотреть демонстрацию.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));
  }
+ if(testMode()&&testReady()&&text.startsWith("/start")){
+  const existing=(await sql("SELECT consent FROM mm_users WHERE id=$1",m.from.id))[0];
+  if(!canUseTestFeatures(Bun.env,existing?.consent))
+   return send(m.from.id,testWarning,buttons([[["✅ Принять условия тестирования","test:agree"]],[["📄 Документы","docs"],["🎬 Демо","demo:home"]]]));
+ }
  let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
  if(t==="/cancel"){const f=discardProfileDraft(u.filters);delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
  if(t==="/help")return send(id,"ℹ️ <b>Мир моделей</b>\n/start — главное меню\n/demo — попробовать без анкеты\n/cancel — отмена текущего действия\n/mydata — экспорт своих данных\n/deleteaccount — удалить аккаунт\n\n🧪 Сейчас включён тестовый режим. Используйте вымышленные данные.",buttons([[["👤 Моя анкета","profile"],["ℹ️ Как работает","how"]],[["🏠 В меню","home"]]]));
@@ -597,6 +602,11 @@ async function onCallback(c){
  await call("answerCallbackQuery",{callback_query_id:c.id});
  if(c.data?.startsWith("demo:"))return demoScreen(c.from.id,c.data.slice(5));
  if(c.data==="docs")return send(c.from.id,"Документы сервиса: "+esc((Bun.env.PUBLIC_URL||"").replace(/\/$/,"")+"/documents"));
+ if(testMode()&&c.data!=="test:agree"&&!["test:revoke","privacy","privacy:export","privacy:delete","deleteaccount:cancel","deleteaccount:confirm"].includes(c.data)){
+   const existing=(await sql("SELECT consent FROM mm_users WHERE id=$1",c.from.id))[0];
+   if(!canUseTestFeatures(Bun.env,existing?.consent))
+    return send(c.from.id,testWarning,buttons([[["✅ Принять условия тестирования","test:agree"]],[["📄 Документы","docs"],["🎬 Демо","demo:home"]]]));
+ }
  let u=await who(c.from),id=u.id,a=c.data;
  if(a==="test:agree"){
   if(!testMode()||!testReady())return send(id,"Тестовая регистрация сейчас недоступна.");
