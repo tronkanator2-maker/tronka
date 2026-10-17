@@ -2,7 +2,7 @@ import {SQL} from "bun";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
 import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
-import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer} from "./profile-wizard.ts";
+import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer,toggleProfileRole,canFinishWizardNow} from "./profile-wizard.ts";
 import {isTestMode,canRegister,canUseTestFeatures,testWarning,testMenuText} from "./test-mode.ts";
 import {redactContacts,publicProfileEntries,publicProfileAllowed} from "./visibility.ts";
 import {adminApp} from "./admin.ts";
@@ -414,6 +414,7 @@ async function promptWizard(u){
  const existing=profileDraftOf(u)[item.key];
  return send(u.id,"✍️ <b>Анкета · шаг "+(step+1)+" из "+total+"</b>\n\n"+esc(item.label)+"\nПример: <code>"+esc(item.example)+"</code>"+(existing?"\nСейчас: "+esc(existing):"")+(testMode()&&item.key==="дата рождения"?"\n🧪 Укажите вымышленную дату.":""),buttons([
   ...(item.required?[]:[[["⏭ Пропустить","wizard:skip"]]]),
+  ...(canFinishWizardNow(role,profileDraftOf(u))?[[["✅ Готово · остальные поля потом","wizard:finish_optional"]]]:[]),
   [[["◀️ Назад","wizard:back"],["❌ Отменить","wizard:cancel"]]]
  ]));
 }
@@ -751,6 +752,10 @@ if(a==="docs")return send(id,"Все опубликованные докумен
   const selected=u.filters?.wizardSelected||[];
   if(!selected.length)return send(id,"Выберите хотя бы одну профессию.",buttons([[["🪄 Выбрать","profile_wizard"]]]));
   return startWizard(u,selected.join(", "));
+ }
+ if(a==="wizard:finish_optional"){
+  if(u.state!=="wizard"||!canFinishWizardNow(u.filters?.wizardRole,profileDraftOf(u)))return send(id,"Сначала заполните обязательные поля.");
+  return finishWizard(u);
  }
  if(a==="wizard:resume"){
   if(u.state!=="wizard")return send(id,"Откройте «Моя анкета», чтобы продолжить заполнение.");
