@@ -110,7 +110,7 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
  if(url.pathname==="/admin/data"&&req.method==="GET"){
   const [[stats],sources,pending,reports,users]=await Promise.all([
     sql("SELECT (SELECT count(*) FROM mm_users)::int users,(SELECT count(*) FROM mm_jobs)::int jobs,(SELECT count(*) FROM mm_jobs WHERE source_id IS NOT NULL)::int imported,(SELECT count(*) FROM mm_responses)::int responses,(SELECT count(*) FROM mm_sources WHERE active)::int active_sources,(SELECT count(*) FROM mm_jobs WHERE status='pending')::int pending"),
-    sql("SELECT id,title,city,topic,active,created_at FROM mm_sources ORDER BY created_at DESC LIMIT 100"),
+    sql("SELECT id,title,city,topic,active,mode,last_seen_at,disabled_reason,created_at FROM mm_sources ORDER BY created_at DESC LIMIT 100"),
     sql("SELECT id,body,source_id,created_at FROM mm_jobs WHERE status='pending' ORDER BY id LIMIT 30"),
     sql("SELECT id,reporter,target_user,target_job,kind,status,body,created_at,updated_at FROM mm_reports_v2 ORDER BY id DESC LIMIT 40"),
     sql("SELECT id,username,first_name,active,blocked,suspended,created_at FROM mm_users ORDER BY created_at DESC LIMIT 40")
@@ -144,7 +144,7 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
     await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,'ticket_status',$1::jsonb)",JSON.stringify({id,status}));
     return json({ok:true});
   }
-  if(action==="source_add")await sql("INSERT INTO mm_sources(id,city,topic,active) VALUES($1,$2,$3,TRUE) ON CONFLICT(id) DO UPDATE SET city=EXCLUDED.city,topic=EXCLUDED.topic,active=TRUE",id,String(data.city||"").slice(0,90),String(data.topic||"").slice(0,90));
+  if(action==="source_add")await sql("INSERT INTO mm_sources(id,city,topic,active) VALUES($1,$2,$3,TRUE) ON CONFLICT(id) DO UPDATE SET city=EXCLUDED.city,topic=EXCLUDED.topic,active=TRUE,mode='trial',disabled_reason=NULL,disabled_at=NULL",id,String(data.city||"").slice(0,90),String(data.topic||"").slice(0,90));
   else if(action==="source_off")await sql("UPDATE mm_sources SET active=FALSE WHERE id=$1",id);
   else if(action==="approve"){const jobs=await sql("UPDATE mm_jobs SET status='active' WHERE id=$1 AND status='pending' RETURNING *",id);if(jobs.length&&onApprove)await onApprove(jobs[0])}
   else if(action==="reject")await sql("UPDATE mm_jobs SET status='rejected' WHERE id=$1 AND status='pending'",id);
