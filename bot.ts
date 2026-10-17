@@ -643,18 +643,35 @@ if(a==="more")return send(id,"⚙️ <b>Дополнительно</b>\nИнфо
  if(a==="how")return send(id,"<b>Как работает «Мир моделей»</b>\n\n1. Создайте анкету — можно отвечать по шагам.\n2. Прикрепите ключевое фото (до пяти).\n3. Настройте фильтры по городу, типу работы и оплате.\n4. Найдите заявку и отправьте персональный отклик либо разместите свою заявку.\n5. Принимайте приглашения и отклики, затем договаривайтесь напрямую.\n\n🧪 Пока включено тестирование: используйте только вымышленные данные. Платежи не работают.",buttons([[["👤 Создать анкету","profile"],["📢 Посмотреть заявки","jobs"]],[["🏠 В меню","home"]]]));
  if(a==="access_info")return send(id,testMode()?"🧪 <b>Тестовый доступ открыт</b>\nОплата отключена, лимиты для тестирования сняты. Тестовые данные будут удалены при подготовке к коммерческому запуску.":"Пробный и платный доступ проверяются по текущей подписке.");
  if(a==="myresponses"){
-  const responses=await sql("SELECT r.id,r.job_id,r.status,r.created_at,j.body FROM mm_responses r LEFT JOIN mm_jobs j ON j.id=r.job_id WHERE r.user_id=$1 ORDER BY r.created_at DESC LIMIT 15",id);
+  const responses=await sql("SELECT r.id,r.job_id,r.status,r.created_at,j.body,j.owner FROM mm_responses r LEFT JOIN mm_jobs j ON j.id=r.job_id WHERE r.user_id=$1 ORDER BY r.created_at DESC LIMIT 15",id);
   if(!responses.length)return send(id,"Вы ещё не отправляли отклики.",buttons([[["📢 Найти заявки","jobs"],["🏠 В меню","home"]]]));
   const labels={pending:"🕓 Ожидает",accepted:"✅ Принят",declined:"❌ Отклонён"};
   const lines=responses.map(r=>"№"+r.id+" · "+esc(get(r.body||{},"название заявки")||"Заявка №"+r.job_id)+" — "+(labels[r.status]||esc(r.status||"отправлен")));
-  return send(id,"📬 <b>Ваши последние отклики</b>\n\n"+lines.join("\n"),buttons([[["📢 Найти заявки","jobs"],["🏠 В меню","home"]]]));
+  const rows=responses.filter(r=>r.status==="accepted"&&Number(r.owner)>0).slice(0,5).map(r=>[["💬 Связаться по отклику №"+r.id,"relay:"+r.owner]]);
+  rows.push([["📢 Найти заявки","jobs"],["🏠 В меню","home"]]);
+  return send(id,"📬 <b>Ваши последние отклики</b>\n\n"+lines.join("\n"),buttons(rows));
  }
  if(a==="myinvites"){
   const invitations=await sql("SELECT id,from_user,to_user,status,created_at FROM mm_invitations WHERE from_user=$1 OR to_user=$1 ORDER BY created_at DESC LIMIT 20",id);
   if(!invitations.length)return send(id,"Приглашений пока нет.",buttons([[["🔎 Каталог анкет","browse:0"],["🏠 В меню","home"]]]));
-  const labels={sent:"🕓 Ожидает",accepted:"✅ Принято",declined:"❌ Отклонено"};
+  const labels={sent:"🕓 Ожидает",accepted:"✅ Принято",declined:"❌ Отклонено",cancelled:"🚫 Отменено"};
   const lines=invitations.map(inv=>(Number(inv.from_user)===Number(id)?"📤 Исходящее":"📥 Входящее")+" №"+inv.id+" — "+(labels[inv.status]||esc(inv.status||"неизвестно")));
-  return send(id,"✉️ <b>Ваши приглашения</b>\n\n"+lines.join("\n"),buttons([[["🔎 Каталог анкет","browse:0"],["🏠 В меню","home"]]]));
+  const rows=[];
+  for(const invite of invitations.slice(0,10)){
+   const mine=Number(invite.from_user)===Number(id),peer=mine?invite.to_user:invite.from_user;
+   if(invite.status==="sent"&&!mine)rows.push([["✅ Принять №"+invite.id,"acceptinvite:"+invite.id],["❌ Отклонить","rejectinvite:"+invite.id]]);
+   else if(invite.status==="sent"&&mine)rows.push([["🚫 Отменить №"+invite.id,"cancelinvite:"+invite.id]]);
+   else if(invite.status==="accepted")rows.push([["💬 Переписка №"+invite.id,"relay:"+peer]]);
+  }
+  rows.push([["🔎 Каталог анкет","browse:0"],["🏠 В меню","home"]]);
+  return send(id,"✉️ <b>Ваши приглашения</b>\n\n"+lines.join("\n"),buttons(rows));
+ }
+ if(a.startsWith("cancelinvite:")){
+  const inviteId=Number(a.slice("cancelinvite:".length));
+  const rows=await sql("UPDATE mm_invitations SET status='cancelled' WHERE id=$1 AND from_user=$2 AND status='sent' RETURNING to_user",inviteId,id);
+  if(!rows.length)return send(id,"Приглашение уже обработано.");
+  try{await send(rows[0].to_user,"Входящее приглашение №"+inviteId+" отменено отправителем.")}catch(e){console.error("Invite cancellation notice",String(e))}
+  return send(id,"Приглашение отменено. Контакты не раскрыты.");
  }
  if(a==="invitefriend"){
  const whoAmI=await call("getMe",{});const name=whoAmI.ok?whoAmI.result.username:(Bun.env.BOT_USERNAME||"").replace(/^@/,"");
