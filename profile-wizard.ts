@@ -1,6 +1,7 @@
 // State machine for a short Telegram-first profile editor.
 // This module contains only presentation metadata and can be tested without Telegram.
-export const WIZARD_ROLES=["модель","актёр","фотограф","видеограф","визажист","стилист по одежде","бренд","другое"];
+import {ROLES,ageAt} from "./engine.ts";
+export const WIZARD_ROLES=[...ROLES];
 const common=[
  {key:"имя",label:"Как к вам обращаться?",example:"Анна",required:true},
  {key:"дата рождения",label:"Дата рождения в формате ДД.ММ.ГГГГ",example:"12.09.2002",required:true},
@@ -19,10 +20,14 @@ const model=[
 ];
 const professional=[
  {key:"опыт и проекты",label:"Опыт и проекты",example:"3 года, съёмки для брендов",required:false},
- {key:"портфолио",label:"Ссылка на портфолио",example:"https://behance.net/...",required:true},
+ {key:"портфолио",label:"Ссылка на портфолио",example:"https://behance.net/...",required:false},
  {key:"о себе",label:"О себе или о вашем проекте",example:"Снимаю каталоги, люблю уличный стиль",required:false}
 ];
-export const wizardFields=role=>[...common,...(["модель","актёр"].includes(role)?model:professional)];
+export const wizardFields=role=>{
+ if(["модель","актёр"].includes(role))return [...common,...model];
+ const needsPortfolio=/фотограф|видеограф|визажист|стилист|бьюти-мастер/.test(role);
+ return [...common,...professional.map(field=>field.key==="портфолио"?{...field,required:needsPortfolio}:field)];
+};
 export const wizardField=(role,index)=>wizardFields(role)[index]||null;
 export const wizardCompleted=(role,index)=>index>=wizardFields(role).length;
 export const wizardAnswer=(field,value)=>{
@@ -31,6 +36,11 @@ export const wizardAnswer=(field,value)=>{
  if(!v)return {ok:false,error:"Введите значение. Для необязательных полей есть кнопка «Пропустить»."};
  if(v.length>350)return {ok:false,error:"Слишком длинное значение. Максимум 350 символов."};
  if(field.key==="дата рождения"&&!/^\d{2}\.\d{2}\.\d{4}$/.test(v))return {ok:false,error:"Пример даты: 12.09.2002. В тесте используйте вымышленную дату."};
- if(field.key==="рост"&&!/^\d{2,3}$/.test(v))return {ok:false,error:"Рост вводится цифрами, например 172."};
+ if(field.key==="дата рождения"){
+  const age=ageAt(v);
+  if(age===null)return {ok:false,error:"Проверьте дату: формат ДД.ММ.ГГГГ."};
+  if(age<18||age>110)return {ok:false,error:"В тестировании поддерживаются только взрослые анкеты (18+). Укажите вымышленную дату взрослого."};
+ }
+ if(field.key==="рост"&&(!/^\d{2,3}$/.test(v)||Number(v)<80||Number(v)>250))return {ok:false,error:"Рост должен быть числом от 80 до 250 см."};
  return {ok:true,value:v};
 };
