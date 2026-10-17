@@ -17,20 +17,33 @@ const common=[
  {key:"город",label:"В каком городе вы работаете?",example:"Москва, Коломна",required:true}
 ];
 const model=[
- {key:"пол",label:"Пол для подбора по требованиям кастингов",example:"женский",required:true},
+ {key:"пол",label:"Пол для подбора кастингов",example:"женский",required:true},
  {key:"рост",label:"Рост в сантиметрах",example:"172",required:true},
  {key:"размер одежды",label:"Размер одежды",example:"42–44",required:true},
  {key:"цвет волос",label:"Цвет волос",example:"русый",required:true},
  {key:"длина волос",label:"Длина волос",example:"длинные",required:true},
  {key:"формат",label:"Формат сотрудничества",example:"ТФП, коммерция",required:true},
  {key:"прайс",label:"Ваш прайс",example:"3000 ₽/час",required:true},
- {key:"о себе",label:"Пару слов о вашем опыте",example:"Снимаюсь в каталогах 2 года",required:false},
- {key:"портфолио",label:"Ссылка на портфолио",example:"https://disk.yandex.ru/d/...",required:false}
+ {key:"о себе",label:"Пару слов о вашем опыте",example:"Снимаюсь в каталогах два года",required:false},
+ {key:"портфолио",label:"Ссылка на портфолио",example:"https://disk.yandex.ru/d/...",required:false},
+ {key:"псевдоним",label:"Псевдоним (необязательно)",example:"Анна Крылатая",required:false},
+ {key:"выгляжу на",label:"На какой возраст вы выглядите? (необязательно)",example:"20–25",required:false},
+ {key:"параметры",label:"Параметры фигуры (необязательно)",example:"86-61-90",required:false},
+ {key:"размер обуви",label:"Размер обуви (необязательно)",example:"38",required:false},
+ {key:"тату, пирсинг, борода",label:"Татуировки, пирсинг или борода (необязательно)",example:"небольшая татуировка",required:false},
+ {key:"навыки",label:"Навыки для съёмок (необязательно)",example:"танцы, английский",required:false},
+ {key:"волосы и лицо для бьюти-съёмок",label:"Состояние волос и лица для бьюти-съёмок (необязательно)",example:"волосы не окрашены",required:false},
+ {key:"опыт на мероприятиях",label:"Опыт хостес, промо или мероприятий (необязательно)",example:"один год на выставках",required:false},
+ {key:"видеовизитка",label:"Ссылка на видеовизитку (необязательно)",example:"https://disk.yandex.ru/d/...",required:false}
 ];
 const professional=[
+ {key:"портфолио",label:"Ссылка на портфолио",example:"https://disk.yandex.ru/d/...",required:false},
  {key:"опыт и проекты",label:"Опыт и проекты",example:"3 года, съёмки для брендов",required:false},
- {key:"портфолио",label:"Ссылка на портфолио",example:"https://behance.net/...",required:false},
- {key:"о себе",label:"О себе или о вашем проекте",example:"Снимаю каталоги, люблю уличный стиль",required:false}
+ {key:"гонорар для модели",label:"Бюджет на модель (по желанию)",example:"до 3000 ₽/час, договорная",required:false},
+ {key:"агентская комиссия",label:"Агентская комиссия (по желанию)",example:"20%",required:false},
+ {key:"как платите модели",label:"Условия оплаты (по желанию)",example:"по договору, в день съёмки",required:false},
+ {key:"о себе",label:"О себе или о проекте",example:"Снимаем каталоги и лукбуки",required:false},
+ {key:"сайт или соцсеть",label:"Ссылка на сайт или соцсеть (необязательно)",example:"https://example.org",required:false}
 ];
 export const wizardFields=role=>{
  const roles=String(role||"").split(",").map(x=>x.trim());
@@ -38,6 +51,10 @@ export const wizardFields=role=>{
  const needsPortfolio=roles.some(x=>/фотограф|видеограф|визажист|стилист|бьюти-мастер/.test(x));
  return [...common,...professional.map(field=>field.key==="портфолио"?{...field,required:needsPortfolio}:field)];
 };
+export function canFinishWizardNow(role,profile){
+ const fields=wizardFields(role),saved=profile||{};
+ return fields.every(f=>!f.required || String(saved[f.key]??"").trim().length>0);
+}
 export const wizardField=(role,index)=>wizardFields(role)[index]||null;
 export const wizardCompleted=(role,index)=>index>=wizardFields(role).length;
 export const wizardAnswer=(field,value)=>{
