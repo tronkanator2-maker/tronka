@@ -443,7 +443,7 @@ async function showWizardRolePage(id,page=0,selected=[]){
   "\n\nВыбрано: "+esc(chosen.join(", ")||"пока ничего"),buttons(rows));
 }
 async function startWizard(u,role){
- if(!WIZARD_ROLES.includes(role))return send(u.id,"Выберите профессию из списка.");
+ if(!String(role).split(",").map(x=>x.trim()).every(x=>WIZARD_ROLES.includes(x)))return send(u.id,"Выберите профессии из справочника.");
  const profile={...profileDraftOf(u),"кто вы":role};
  const filters=stageProfileDraft(u.filters,profile,{wizardRole:role,wizardStep:0});
  await change(u.id,{state:"wizard",filters});
