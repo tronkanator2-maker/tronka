@@ -342,7 +342,7 @@ async function processResponseOutbox(){
    try{
     const owner=(await sql("SELECT * FROM mm_users WHERE id=$1",outbox.owner))[0];
     const applicant=(await sql("SELECT * FROM mm_users WHERE id=$1",outbox.user_id))[0];
-    if(!owner||!applicant||owner.blocked||owner.suspended||!owner.active||outbox.job_status!=="active"||outbox.paused){
+    if(!owner||!applicant||owner.blocked||owner.suspended||!owner.active||outbox.response_status!=="pending"||outbox.job_status!=="active"||outbox.paused){
      await sql("UPDATE mm_response_outbox SET completed_at=NOW() WHERE response_id=$1",outbox.response_id);
      continue;
     }
@@ -375,7 +375,10 @@ async function submitResponse(u,body){
  const j=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",jobId))[0];
  if(!j||j.owner===id)return send(id,"Заявка недоступна для отклика.");
  const existing=await sql("SELECT id FROM mm_responses WHERE job_id=$1 AND user_id=$2",jobId,id);
- if(existing.length)return send(id,"Вы уже откликались на эту заявку.");
+ if(existing.length){
+  if(j.owner!==0)await sql("INSERT INTO mm_response_outbox(response_id) VALUES($1) ON CONFLICT DO NOTHING",existing[0].id);
+  return send(id,"Отклик уже сохранён. Если уведомление ещё не было доставлено заказчику, бот повторит отправку.");
+ }
  const quota=await sql("SELECT COUNT(*)::int n FROM mm_responses WHERE user_id=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());
  if(!hasPaidAccess(u)&&quota[0].n>=1)return send(id,"На этой неделе бесплатный отклик уже использован.");
  const inserted=await sql("INSERT INTO mm_responses(job_id,user_id,message) VALUES($1,$2,$3) ON CONFLICT(job_id,user_id) DO NOTHING RETURNING id",jobId,id,message);
