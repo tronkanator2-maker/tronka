@@ -26,3 +26,17 @@ test("public docs are escaped and all agreements tracked",()=>{
  expect(requiredDocumentSlugs).toContain("processing");
  expect(requiredDocumentSlugs).toContain("distribution");
 });
+
+import {eligibleProfile} from "../engine.ts";
+test("model needs a complete level-2 profile and key photo",()=>{
+ const profile={"кто вы":"модель","имя":"Анна","дата рождения":"12.09.2002","город":"Москва","пол":"женский","рост":"172","размер одежды":"42","цвет волос":"русый","длина волос":"длинные","формат":"ТФП","прайс":"договорная"};
+ expect(eligibleProfile(profile,true)).toBe(true);
+ expect(eligibleProfile(profile,false)).toBe(false);
+ const incomplete={...profile};delete incomplete["рост"];
+ expect(eligibleProfile(incomplete,true)).toBe(false);
+});
+test("photographer must include portfolio to be searchable",()=>{
+ const profile={"кто вы":"фотограф","имя":"Иван","дата рождения":"05.03.1995","город":"Москва"};
+ expect(eligibleProfile(profile,true)).toBe(false);
+ expect(eligibleProfile({...profile,"портфолио":"https://drive.google.com"},true)).toBe(true);
+});
