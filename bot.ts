@@ -1,18 +1,24 @@
 import {SQL} from "bun";
+import {isTestMode,canRegister,canUseTestFeatures,testWarning,testMenuText} from "./test-mode.ts";
 import {redactContacts,publicProfileEntries,publicProfileAllowed} from "./visibility.ts";
 import {adminApp} from "./admin.ts";
 import {setupSourceHealth,allowanceForModel,reviewSourceHealth} from "./source-health.ts";
 import {payMatches,formatMatches} from "./pricing.ts";
 import {exportAccount,deleteAccount,sendAccountExport} from "./privacy.ts";
 import {parseWithModel} from "./ai-parser.ts";
-import {prepareDocuments,legalReady,recordConsent,publicDocumentRoute,latestDocuments,documentHashes,allConsentsCurrent,consentIsCurrent} from "./documents.ts";
-import {prepareEntitlements,startPhoneTrial,hasPaidAccess,weekStartMoscow} from "./access.ts";
+import {prepareDocuments,legalReady as legalDocumentsReady,recordConsent,publicDocumentRoute,latestDocuments,documentHashes,allConsentsCurrent as fullConsentsCurrent,consentIsCurrent} from "./documents.ts";
+import {prepareEntitlements,startPhoneTrial,hasPaidAccess as activeSubscription,weekStartMoscow} from "./access.ts";
 import {setupFeedback, scheduleFeedback, feedbackTick, feedbackCallback, feedbackText, feedbackSummary} from "./feedback.ts";
 import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity, eligibleProfile, matchesCastingRequirements, isExplicitAdultCasting,matchesWantedProfileRoles} from "./engine.ts";
 const db=new SQL(Bun.env.DATABASE_URL||"postgres://unconfigured");
 const token=Bun.env.BOT_TOKEN||"", secret=Bun.env.WEBHOOK_SECRET||"";
 const admin=(Bun.env.ADMIN_IDS||"").split(",");
 const roles=ROLES;
+const testMode=()=>isTestMode(Bun.env);
+const hasPaidAccess=(u,at)=>testMode()||activeSubscription(u,at);
+const legalReady=async query=>canRegister({...Bun.env,REGISTRATION_ENABLED:"true"},await legalDocumentsReady(query));
+const allConsentsCurrent=(c,hashes)=>testMode()?canUseTestFeatures(Bun.env,c):fullConsentsCurrent(c,hashes);
+const testReady=()=>Bun.env.REGISTRATION_ENABLED==="true";
 const menu={inline_keyboard:[[{text:"👤 Моя анкета",callback_data:"profile"},{text:"🎯 Фильтры",callback_data:"filters"}],[{text:"📢 Найти заявки",callback_data:"jobs"},{text:"➕ Разместить",callback_data:"new"}],[{text:"📌 Мои заявки",callback_data:"mine"},{text:"⏸️ Поиск вкл/выкл",callback_data:"pause"}],[{text:"🔎 Анкеты",callback_data:"browse:0"},{text:"📚 Статьи",callback_data:"articles"}],[{text:"🎁 Пригласить друга",callback_data:"invitefriend"},{text:"❓ Поддержка",callback_data:"support"}],[{text:"🔐 Мои данные",callback_data:"privacy"}]]};
 const esc=s=>String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
 async function sql(q,...v){return db.unsafe(q,v)}
@@ -85,8 +91,19 @@ async function currentDocumentHashes(){
 function consentBoard(u,hashes){let c=u.consent||{};
  const ok=i=>consentIsCurrent(c,hashes,i);
  return buttons([...consentNames.map((x,i)=>[[(ok(i)?"✅ ":"☐ ")+x,"consent:"+i]]),[["📄 Документы","docs"]],...([0,1,2].every(ok)?[[["Продолжить","go"]]]:[])])}
-async function begin(u){if(u.blocked||u.suspended)return send(u.id,"Аккаунт ограничен. Вы можете написать /support или экспортировать данные через /mydata.");if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql)))return send(u.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации юридических документов и проверки интеграций. Пока можно посмотреть демонстрацию без регистрации.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));const hashes=await currentDocumentHashes();
- if(!allConsentsCurrent(u.consent,hashes))return send(u.id,"<b>Добро пожаловать в Мир моделей!</b>\nОзнакомьтесь с действующими документами и дайте три отдельных согласия.",consentBoard(u,hashes));if(!u.phone)return send(u.id,"Подтвердите ваш собственный номер через кнопку Telegram. Номер не будет опубликован.",{keyboard:[[{text:"📱 Поделиться номером",request_contact:true}]],resize_keyboard:true,one_time_keyboard:true});if(!u.username)return send(u.id,"Установите @имя пользователя в настройках Telegram, затем отправьте /start.");return send(u.id,"<b>✨ Мир моделей</b>\nВыберите раздел.",menu)}
+async function begin(u){
+ if(u.blocked||u.suspended)return send(u.id,"Аккаунт ограничен. Напишите /support или используйте /mydata.");
+ if(!testReady()||!(await legalReady(sql)))return send(u.id,"«Мир моделей» готовится к запуску. Пока доступно демо.",buttons([[["🎬 Демо","demo:home"]],[["📄 Документы","docs"]]]));
+ if(testMode()){
+  if(!canUseTestFeatures(Bun.env,u.consent))return send(u.id,testWarning,buttons([[["✅ Принять условия тестирования","test:agree"]],[["📄 Документы (пока не утверждены)","docs"]],[["🎬 Посмотреть демо","demo:home"]]]));
+  return send(u.id,testMenuText,menu);
+ }
+ const hashes=await currentDocumentHashes();
+ if(!fullConsentsCurrent(u.consent,hashes))return send(u.id,"<b>Добро пожаловать в Мир моделей!</b>\nОзнакомьтесь с документами и дайте три отдельных согласия.",consentBoard(u,hashes));
+ if(!u.phone)return send(u.id,"Подтвердите ваш собственный номер через кнопку Telegram. Номер не будет опубликован.",{keyboard:[[{text:"📱 Поделиться номером",request_contact:true}]],resize_keyboard:true,one_time_keyboard:true});
+ if(!u.username)return send(u.id,"Установите @имя пользователя в настройках Telegram, затем отправьте /start.");
+ return send(u.id,"<b>✨ Мир моделей</b>\nВыберите раздел.",menu);
+}
 const parse=parseFields;
 const get=field;
 const profileTpl="Кто вы: модель\nИмя: Анна\nДата рождения: 12.09.2002\nГород: Москва\nПол: женский\nРост: 172\nРазмер одежды: 42\nЦвет волос: русый\nДлина волос: длинные\nФормат: коммерция, ТФП\nПрайс: 3000 ₽/час\nО себе: съёмки каталогов\nПортфолио: https://example.com";
