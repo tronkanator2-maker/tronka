@@ -171,7 +171,7 @@ export function matchesCastingRequirements(profile,job){
  const gender=field(profile,"пол").toLowerCase();
  if(female&&!male&&!/женск|женщин/.test(gender))return false;
  if(male&&!female&&!/мужск|мужчин/.test(gender))return false;
- const range=requirements.match(/(?:^|\s)(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*(?:лет|года|год)\b/);
+ const range=requirements.match(/(?:^|\s)(\d{1,2})\s*[-–—]\s*(\d{1,2})\s*(?:лет|года|год)(?=$|[^а-яё])/);
  if(range){
   const min=Number(range[1]),max=Number(range[2]),n=ageAt(field(profile,"дата рождения"));
   if(min>=1&&max>=min&&max<=100&&n!==null&&(n<min||n>max))return false;
