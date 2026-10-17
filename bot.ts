@@ -194,7 +194,7 @@ async function sendMatchedProfile(job,p){
  if(!p.active||p.blocked||p.suspended||!allConsentsCurrent(p.consent,await currentDocumentHashes())||!eligibleProfile(p.profile,p.photo))return false;
  if(!roleMatch(get(job.body,"кого ищу"),get(p.profile,"кто вы")))return false;
  const owner=(await sql("SELECT filters FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE",job.owner))[0];
- if(!owner||!matchesWantedProfileRoles(owner.filters?.profileRoles||[],get(p.profile,"кто вы")))return false;
+ if(!owner||!allConsentsCurrent((await sql("SELECT consent FROM mm_users WHERE id=$1",job.owner))[0]?.consent,await currentDocumentHashes())||!matchesWantedProfileRoles(owner.filters?.profileRoles||[],get(p.profile,"кто вы")))return false;
  if(isExplicitAdultCasting([get(job.body,"описание"),get(job.body,"требования"),get(job.body,"тип работы")].join(" ")) && !(p.filters?.adult===true && ageAt(get(p.profile,"дата рождения"))>=18))return false;
  if(!matchesCastingRequirements(p.profile,job.body))return false;
  if(!payMatches(p.profile,job.body))return false;
@@ -309,18 +309,27 @@ async function onMessage(m){
    if(hasInviter.length)await sql("INSERT INTO mm_referrals(inviter,invitee) VALUES($1,$2) ON CONFLICT(invitee) DO NOTHING",inviter,id);
   }
  }
- if(/^job_\d+$/.test(payload)&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&u.phone){
+ if(/^job_\d+$/.test(payload)&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&u.phone&&allConsentsCurrent(u.consent,await currentDocumentHashes())){
   const j=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",Number(payload.slice(4))))[0];
   if(j){await card(id,j);return begin(u)}
   await send(id,"Эта заявка больше не актуальна.");return begin(u);
  }
- if(/^profile_\d+$/.test(payload)&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&u.phone){
+ if(/^profile_\d+$/.test(payload)&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&u.phone&&allConsentsCurrent(u.consent,await currentDocumentHashes())){
   const target=(await sql("SELECT * FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE AND photo IS NOT NULL",Number(payload.slice(8))))[0];
   if(target&&eligibleProfile(target.profile,target.photo)&&allConsentsCurrent(target.consent,await currentDocumentHashes())){await profile(id,target);return begin(u)}
   await send(id,"Эта анкета сейчас не участвует в поиске.");return begin(u);
  }
  return begin(u);
-}if(t==="/support"){await change(id,{state:"support"});return send(id,"Опишите проблему одним сообщением.");}if(admin.includes(String(id))&&t==="/stats"){let a=await sql("SELECT (SELECT count(*) FROM mm_users)::int AS users,(SELECT count(*) FROM mm_jobs)::int AS jobs,(SELECT count(*) FROM mm_reports)::int AS reports");return send(id,JSON.stringify(a[0]));}if((u.blocked||u.suspended)&&u.state!=="support")return send(id,"Ваш профиль ограничен; напишите /support.");if(t&&!t.startsWith("/")&&await feedbackText(id,t,sql,send))return; if(m.contact){if(m.contact.user_id!==id)return send(id,"Поделитесь именно своим номером.");await change(id,{phone:m.contact.phone_number});const trial=await startPhoneTrial(sql,id,m.contact.phone_number,Bun.env.PHONE_HASH_PEPPER||secret);if(trial.started)await send(id,"🎁 Пробный период на 15 дней активирован.");await call("sendMessage",{chat_id:id,text:"Телефон подтверждён.",reply_markup:{remove_keyboard:true}});return begin({...u,phone:m.contact.phone_number})}
+}if(t==="/support"){await change(id,{state:"support"});return send(id,"Опишите проблему одним сообщением.");}if(admin.includes(String(id))&&t==="/stats"){let a=await sql("SELECT (SELECT count(*) FROM mm_users)::int AS users,(SELECT count(*) FROM mm_jobs)::int AS jobs,(SELECT count(*) FROM mm_reports)::int AS reports");return send(id,JSON.stringify(a[0]));}if((u.blocked||u.suspended)&&u.state!=="support")return send(id,"Ваш профиль ограничен; напишите /support.");if(t&&!t.startsWith("/")&&await feedbackText(id,t,sql,send))return; if(m.contact){
+ if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))return begin(u);
+ if(!m.contact.user_id||Number(m.contact.user_id)!==Number(id))return send(id,"Поделитесь своим номером через кнопку Telegram.");
+ if(!m.contact.phone_number)return send(id,"Номер не получен. Используйте кнопку подтверждения.");
+ await change(id,{phone:m.contact.phone_number});
+ const trial=await startPhoneTrial(sql,id,m.contact.phone_number,Bun.env.PHONE_HASH_PEPPER||"");
+ if(trial.started)await send(id,"🎁 Пробный период на 15 дней активирован.");
+ await call("sendMessage",{chat_id:id,text:"Телефон подтверждён.",reply_markup:{remove_keyboard:true}});
+ return begin({...u,phone:m.contact.phone_number,trial_until:trial.until||u.trial_until});
+}
 if((Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))&&u.state!=="support")return begin(u);
 if(m.photo?.length&&u.state==="photo"){
  const file=m.photo[m.photo.length-1].file_id;
