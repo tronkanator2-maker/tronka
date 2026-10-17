@@ -1,4 +1,5 @@
 import {SQL} from "bun";
+import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
 import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
 import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer} from "./profile-wizard.ts";
@@ -457,6 +458,37 @@ async function acceptWizardText(u,txt){
  return wizardCompleted(role,filters.wizardStep)?finishWizard(current):promptWizard(current);
 }
 
+
+async function jobWizardPrompt(u){
+ const step=Number(u.filters?.jobWizardStep??0),f=jobWizardField(step);
+ if(!f)return finishJobWizard(u);
+ const existing=u.filters?.jobWizardDraft?.[f.key];
+ const controls=[];
+ if(!f.required)controls.push([["⏭ Пропустить","jobwizard:skip"]]);
+ controls.push([["◀️ Назад","jobwizard:back"],["❌ Отменить","jobwizard:cancel"]]);
+ return send(u.id,"📢 <b>Заявка · шаг "+(step+1)+" из "+jobWizardFields.length+"</b>\n\n"+esc(f.label)+"\nПример: <code>"+esc(f.example)+"</code>"+(existing?"\nСейчас: "+esc(existing):""),buttons(controls));
+}
+async function finishJobWizard(u){
+ const draft={...(u.filters?.jobWizardDraft||{})};
+ const errors=validJob(draft);
+ if(errors.length){
+  await change(u.id,{state:"job"});
+  return send(u.id,"Некоторые поля заявки требуют исправления:\n• "+esc(errors.join("\n• "))+"\n\nОтправьте заполненный шаблон заявки ещё раз.",buttons([[["📝 Открыть шаблон","job_template"],["❌ Отменить","jobwizard:cancel"]]]));
+ }
+ const filters={...clearJobWizard(u.filters),draft};
+ await change(u.id,{state:"job_confirm",filters});
+ return send(u.id,"📋 <b>Проверьте заявку</b>\n\n"+Object.entries(draft).map(([k,v])=>esc(k)+": "+esc(v)).join("\n")+"\n\nПосле публикации заявка появится в поиске.",buttons([[["✅ Опубликовать","publish"],["✏️ Исправить","job_template"]],[["❌ Отменить","jobwizard:cancel"]]]));
+}
+async function saveJobWizardAnswer(u,text){
+ const step=Number(u.filters?.jobWizardStep??0),f=jobWizardField(step),v=validateJobWizardAnswer(f,text);
+ if(!v.ok)return send(u.id,"⚠️ "+esc(v.error));
+ const draft={...(u.filters?.jobWizardDraft||{}),[f.key]:v.value};
+ const filters=jobWizardFilters(u.filters,draft,step+1);
+ await change(u.id,{filters});
+ const current={...u,filters};
+ return jobWizardFinished(step+1)?finishJobWizard(current):jobWizardPrompt(current);
+}
+
 async function submitResponse(u,body){
  const id=u.id,jobId=Number(u.filters?.replyJobId),message=String(body||"").trim();
  if(!Number.isSafeInteger(jobId)||jobId<=0)return send(id,"Черновик отклика больше не найден. Найдите заявку заново.");
@@ -506,7 +538,7 @@ async function onMessage(m){
    return send(m.from.id,testWarning,buttons([[["✅ Принять условия тестирования","test:agree"]],[["📄 Документы","docs"],["🎬 Демо","demo:home"]]]));
  }
  let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
- if(t==="/cancel"){const f=discardProfileDraft(u.filters);delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
+ if(t==="/cancel"){const f=clearJobWizard(discardProfileDraft(u.filters));delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
  if(t==="/help")return send(id,"ℹ️ <b>Мир моделей</b>\n/start — главное меню\n/demo — попробовать без анкеты\n/cancel — отмена текущего действия\n/mydata — экспорт своих данных\n/deleteaccount — удалить аккаунт\n\n🧪 Сейчас включён тестовый режим. Используйте вымышленные данные.",buttons([[["👤 Моя анкета","profile"],["ℹ️ Как работает","how"]],[["🏠 В меню","home"]]]));
  if(t==="/teststatus")return send(id,testMode()?"🧪 Тестовый режим активен. Регистрация открыта: "+(testReady()?"да":"нет")+"\nПлатежи отключены.\nТелефон не требуется.":"Тестовый режим выключен.");if(t==="/mydata"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Данных нет.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Не получилось отправить архив. Попробуйте позже.");return;}
  if(t==="/deleteaccount"){await change(id,{state:"delete_confirm"});return send(id,"<b>Удалить аккаунт и данные?</b>\nЭто удалит анкету, фотографии из нашей базы, ваши заявки, историю откликов, отзывов, приглашений, согласий и обращений. Сообщения, ранее отправленные другим пользователям Telegram, стереть удалённо нельзя.\n\nПодтвердите удаление отдельной кнопкой.",buttons([[["❌ Удалить мои данные","deleteaccount:confirm"]],[["Отмена","deleteaccount:cancel"]]]));}if(t==="/subscription"&&testMode())return send(id,"🧪 Тестовый доступ: лимиты заявок, откликов и приглашений для проверки сняты. Настоящие платежи выключены.");if(t==="/subscription")return send(id,hasPaidAccess(u)?"⭐ Подписка или пробный период активны до "+esc(new Date(u.access_until&&new Date(u.access_until)>new Date(u.trial_until||0)?u.access_until:u.trial_until).toLocaleDateString("ru-RU")):"Бесплатный доступ: один отклик, одна заявка и одно приглашение в календарную неделю.");if(t.startsWith("/start")){
@@ -566,6 +598,7 @@ if(u.state==="relay"){
   return send(id,"✅ Сообщение передано. Можете написать ещё или выйти: /cancel");
  }
  if(u.state==="wizard"){if(m.photo?.length)return send(id,"Для фото будет отдельный шаг после заполнения анкеты. Сейчас отправьте ответ текстом.");return acceptWizardText(u,t)}
+ if(u.state==="job_wizard")return saveJobWizardAnswer(u,t);
  if(u.state==="reply_compose"){if(!t.trim())return send(id,"Отклик должен быть текстовым сообщением. Для отмены — /cancel.");return submitResponse(u,t)}
  if(u.state==="support"){if(m.photo?.length)return saveReport(u,m.caption||"Фото-доказательство",m.photo.at(-1).file_id);return saveReport(u,t)}
 if(u.state==="profile"){
@@ -591,7 +624,7 @@ if(u.state==="job_edit"){
  await change(id,{filters:{...(u.filters||{}),draft},state:"job_edit_confirm"});
  return send(id,"<b>Проверьте изменения заявки №"+originalId+"</b>\n"+esc(t),buttons([[["✅ Сохранить изменения","updatejob:"+originalId],["✏️ Изменить","jobedit:"+originalId]]]));
 }
-if(u.state==="job"){let p=parse(t),errors=validJob(p);if(errors.length)return send(id,"Исправьте заявку:\n• "+esc(errors.join("\n• ")));await change(id,{filters:{...(u.filters||{}),draft:p},state:"job_confirm"});return send(id,"Предпросмотр:\n"+esc(t),buttons([[["✅ Опубликовать","publish"],["✏️ Исправить","new"]]]))}
+if(u.state==="job"){let p=parse(t),errors=validJob(p);if(errors.length)return send(id,"Исправьте заявку:\n• "+esc(errors.join("\n• ")));await change(id,{filters:{...(u.filters||{}),draft:p},state:"job_confirm"});return send(id,"Предпросмотр:\n"+esc(t),buttons([[["✅ Опубликовать","publish"],["✏️ Исправить","job_template"]]]))}
 if(u.state==="browse_city"){
   const city=t.trim().toLowerCase()==="все"?"":t.trim().slice(0,80);
   const filters={...(u.filters||{}),profileCity:city};
@@ -759,7 +792,38 @@ if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправ
  const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];
  if(fresh.photo){await backfill(fresh);await profileBackfill(fresh)}
  return send(id,fresh.photo?"✅ Фото сохранены! Анкета готова к подбору, если все поля заполнены.":"Фото пока не добавлено. Вернуться к загрузке можно в любое время.",buttons([[["👤 Моя анкета","profile"],["🏠 В меню","home"]]]));
-}if(a==="new"){await change(id,{state:"job"});return send(id,"Скопируйте и заполните шаблон заявки одним сообщением:\n<code>"+esc(jobTpl())+"</code>")}if(a==="publish"){let p=u.filters?.draft;if(u.state!=="job_confirm"||!p)return send(id,"Сначала проверьте и подтвердите актуальную версию заявки.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].total)return send(id,"Без подписки можно разместить одну новую заявку с понедельника по воскресенье.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const row=(await sql("INSERT INTO mm_jobs(owner,body,expires_at) VALUES($1,$2::jsonb,$3) RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString()))[0];await change(id,{state:"",filters:Object.fromEntries(Object.entries(u.filters).filter(([k])=>k!=="draft"))});await send(id,"Заявка №"+row.id+" опубликована.");await dispatch(row);return}if(a==="jobs"){
+}if(a==="new")return send(id,"📢 <b>Как создать заявку?</b>\nМожно ответить на восемь коротких вопросов или заполнить шаблон одним сообщением.",buttons([[["🪄 По шагам","jobwizard:start"]],[["📝 Заполнить шаблон","job_template"]],[["🏠 В меню","home"]]]));
+ if(a==="job_template"){
+  const filters={...(u.filters||{})};
+  const sample=u.filters?.jobWizardDraft||u.filters?.draft;
+  const template=sample&&Object.keys(sample).length?Object.entries(sample).map(([k,v])=>k+": "+v).join("\n"):jobTpl();
+  await change(id,{state:"job",filters});
+  return send(id,"📝 Заполните и отправьте шаблон одним сообщением:\n<code>"+esc(template)+"</code>");
+ }
+ if(a==="jobwizard:start"){
+  const filters=jobWizardFilters(u.filters,{},0);
+  await change(id,{state:"job_wizard",filters});
+  return jobWizardPrompt({...u,filters});
+ }
+ if(a==="jobwizard:resume"){
+  if(u.state!=="job_wizard")return send(id,"Создайте новую заявку в меню.");
+  return jobWizardPrompt(u);
+ }
+ if(a==="jobwizard:cancel"){
+  const filters={...clearJobWizard(u.filters)};delete filters.draft;
+  await change(id,{state:"",filters});
+  return send(id,"Черновик заявки удалён. Ничего не опубликовано.",buttons([[["➕ Новая заявка","new"],["🏠 В меню","home"]]]));
+ }
+ if(a==="jobwizard:back"||a==="jobwizard:skip"){
+  if(u.state!=="job_wizard")return send(id,"Мастер заявки уже завершён.");
+  const step=Number(u.filters?.jobWizardStep??0),field=jobWizardField(step);
+  if(a==="jobwizard:skip"&&field?.required)return send(id,"Этот ответ обязателен.");
+  const filters=jobWizardFilters(u.filters,u.filters?.jobWizardDraft||{},a==="jobwizard:back"?Math.max(0,step-1):step+1);
+  if(a==="jobwizard:skip"&&field)delete filters.jobWizardDraft[field.key];
+  await change(id,{filters});
+  const current={...u,filters};
+  return jobWizardFinished(filters.jobWizardStep)?finishJobWizard(current):jobWizardPrompt(current);
+ }if(a==="publish"){let p=u.filters?.draft;if(u.state!=="job_confirm"||!p)return send(id,"Сначала проверьте и подтвердите актуальную версию заявки.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].total)return send(id,"Без подписки можно разместить одну новую заявку с понедельника по воскресенье.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const row=(await sql("INSERT INTO mm_jobs(owner,body,expires_at) VALUES($1,$2::jsonb,$3) RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString()))[0];await change(id,{state:"",filters:Object.fromEntries(Object.entries(u.filters).filter(([k])=>k!=="draft"))});await send(id,"Заявка №"+row.id+" опубликована.");await dispatch(row);return}if(a==="jobs"){
  const js=await matchingJobs(u,30);
  if(!js.length)return send(id,eligibleProfile(u.profile,u.photo)?"По вашим фильтрам подходящих заявок сейчас нет.":"Добавьте ключевое фото и заполните обязательные поля анкеты, чтобы запустить подбор.",buttons([[["🎯 Фильтры","filters"],["👤 Анкета","profile"]]]));
  for(const j of js)await card(id,j);
