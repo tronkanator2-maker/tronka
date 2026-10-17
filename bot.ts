@@ -1,5 +1,6 @@
 import {SQL} from "bun";
 import {adminApp} from "./admin.ts";
+import {exportAccount,deleteAccount,sendAccountExport} from "./privacy.ts";
 import {parseWithModel} from "./ai-parser.ts";
 import {prepareDocuments,legalReady,recordConsent,publicDocumentRoute,latestDocuments,documentHashes,allConsentsCurrent,consentIsCurrent} from "./documents.ts";
 import {prepareEntitlements,startPhoneTrial,hasPaidAccess,weekStartMoscow} from "./access.ts";
@@ -9,7 +10,7 @@ const db=new SQL(Bun.env.DATABASE_URL||"postgres://unconfigured");
 const token=Bun.env.BOT_TOKEN||"", secret=Bun.env.WEBHOOK_SECRET||"";
 const admin=(Bun.env.ADMIN_IDS||"").split(",");
 const roles=ROLES;
-const menu={inline_keyboard:[[{text:"👤 Моя анкета",callback_data:"profile"},{text:"🎯 Фильтры",callback_data:"filters"}],[{text:"📢 Найти заявки",callback_data:"jobs"},{text:"➕ Разместить",callback_data:"new"}],[{text:"📌 Мои заявки",callback_data:"mine"},{text:"⏸️ Поиск вкл/выкл",callback_data:"pause"}],[{text:"🔎 Анкеты",callback_data:"browse:0"},{text:"📚 Статьи",callback_data:"articles"}],[{text:"🎁 Пригласить друга",callback_data:"invitefriend"},{text:"❓ Поддержка",callback_data:"support"}]]};
+const menu={inline_keyboard:[[{text:"👤 Моя анкета",callback_data:"profile"},{text:"🎯 Фильтры",callback_data:"filters"}],[{text:"📢 Найти заявки",callback_data:"jobs"},{text:"➕ Разместить",callback_data:"new"}],[{text:"📌 Мои заявки",callback_data:"mine"},{text:"⏸️ Поиск вкл/выкл",callback_data:"pause"}],[{text:"🔎 Анкеты",callback_data:"browse:0"},{text:"📚 Статьи",callback_data:"articles"}],[{text:"🎁 Пригласить друга",callback_data:"invitefriend"},{text:"❓ Поддержка",callback_data:"support"}],[{text:"🔐 Мои данные",callback_data:"privacy"}]]};
 const esc=s=>String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
 async function sql(q,...v){return db.unsafe(q,v)}
 async function setup(){
@@ -213,7 +214,10 @@ async function showFilterMenu(u){
 }
 async function backfill(u){const jobs=await sql("SELECT * FROM mm_jobs WHERE status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' ORDER BY created_at DESC LIMIT 100");for(const j of jobs)try{await deliverTo(u,j)}catch(e){console.error("backfill",String(e))}}
 
-async function onMessage(m){if(m.chat?.type&&m.chat.type!=="private"){await onSourcePost(m);return}let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");if(t==="/subscription")return send(id,hasPaidAccess(u)?"⭐ Подписка или пробный период активны до "+esc(new Date(u.access_until&&new Date(u.access_until)>new Date(u.trial_until||0)?u.access_until:u.trial_until).toLocaleDateString("ru-RU")):"Бесплатный доступ: один отклик, одна заявка и одно приглашение в календарную неделю.");if(t.startsWith("/start")){
+async function onMessage(m){if(m.chat?.type&&m.chat.type!=="private"){await onSourcePost(m);return}let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
+ if(t==="/cancel"){await change(id,{state:""});return send(id,"Текущее действие отменено. Вернуться в меню: /start");}
+ if(t==="/mydata"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Данных нет.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Не получилось отправить архив. Попробуйте позже.");return;}
+ if(t==="/deleteaccount"){await change(id,{state:"delete_confirm"});return send(id,"<b>Удалить аккаунт и данные?</b>\nЭто удалит анкету, фотографии из нашей базы, ваши заявки, историю откликов, отзывов, приглашений, согласий и обращений. Сообщения, ранее отправленные другим пользователям Telegram, стереть удалённо нельзя.\n\nПодтвердите удаление отдельной кнопкой.",buttons([[["❌ Удалить мои данные","deleteaccount:confirm"]],[["Отмена","deleteaccount:cancel"]]]));}if(t==="/subscription")return send(id,hasPaidAccess(u)?"⭐ Подписка или пробный период активны до "+esc(new Date(u.access_until&&new Date(u.access_until)>new Date(u.trial_until||0)?u.access_until:u.trial_until).toLocaleDateString("ru-RU")):"Бесплатный доступ: один отклик, одна заявка и одно приглашение в календарную неделю.");if(t.startsWith("/start")){
  const payload=t.trim().split(/\s+/)[1]||"";
  if(/^ref_\d{2,19}$/.test(payload)){
   const inviter=Number(payload.slice(4));
@@ -254,7 +258,16 @@ if(u.state==="browse_city"){
  }
  if(u.state==="filter"){let p=parse(t);await change(id,{filters:{city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});await send(id,"Фильтры сохранены. Подбираю актуальные заявки.",menu);const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await backfill(fresh);return showFilterMenu(fresh)}
 return begin(u)}
-async function onCallback(c){await call("answerCallbackQuery",{callback_query_id:c.id});let u=await who(c.from),id=u.id,a=c.data;if(a.startsWith("consent:")){
+async function onCallback(c){await call("answerCallbackQuery",{callback_query_id:c.id});let u=await who(c.from),id=u.id,a=c.data;if(a==="privacy")return send(id,"🔐 <b>Данные и приватность</b>\nЭкспорт показывает сведения, сохранённые сервисом. Удаление аккаунта безвозвратное; ранее отправленные Telegram-сообщения других людей останутся.",buttons([[["📦 Экспорт данных","privacy:export"]],[["🗑 Удалить аккаунт","privacy:delete"]],[["◀️ В меню","home"]]]));
+ if(a==="privacy:export"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Сведения ещё не сохранены.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Ошибка отправки файла.");return;}
+ if(a==="privacy:delete"){await change(id,{state:"delete_confirm"});return send(id,"<b>Подтвердите окончательное удаление</b>\nАнкета, фото и объявления будут удалены из базы. Уже отправленные сообщения в чужих Telegram-чатах сохранятся.",buttons([[["Да, удалить всё","deleteaccount:confirm"]],[["Отменить","deleteaccount:cancel"]]]));}
+ if(a==="deleteaccount:cancel"){await change(id,{state:""});return send(id,"Удаление отменено.",menu);}
+ if(a==="deleteaccount:confirm"){
+  if(u.state!=="delete_confirm")return send(id,"Сначала откройте раздел «Мои данные» и подтвердите удаление.");
+  await deleteAccount(sql,id);
+  return send(id,"Ваш аккаунт и связанные с ним данные удалены из нашей базы. Для создания нового аккаунта используйте /start.");
+ }
+ if(a.startsWith("consent:")){
  if(!(await legalReady(sql)))return send(id,"Сначала должны быть опубликованы документы сервиса.");
  const n=Number(a.slice("consent:".length));if(!Number.isInteger(n)||n<0||n>2)return;
  const hashes=await currentDocumentHashes(),co={...(u.consent||{})};
