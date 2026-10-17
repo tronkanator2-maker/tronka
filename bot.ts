@@ -131,7 +131,23 @@ async function profile(to,u,heading="Анкета"){
    "\nКонтакты скрыты до принятого приглашения или отклика.\n\n"+reviews.text;
  return send(to,content,buttons([[["✉️ Пригласить","invite:"+u.id]],...(reviews.count?[[["⭐ Все отзывы ("+reviews.count+")","allreviews:"+u.id+":0"]]]:[]),[["⚠️ Пожаловаться","reportuser:"+u.id]]]));
 }
-async function card(to,j){let p=j.body;let lines=["<b>📢 "+esc(get(p,"название заявки"))+"</b>","Кого ищу: "+esc(get(p,"кого ищу")),"Тип работы: "+esc(get(p,"тип работы")),"Город: "+esc(get(p,"город")),"Требования: "+esc(get(p,"требования")||"не указано"),"Оплата: "+esc(get(p,"формат и оплата")),"Дата: "+esc(get(p,"дата съёмки")||"не указана"),"",esc(j.owner===0?sourceJobDisplayText(get(p,"описание")):sourcePublicText(get(p,"описание")))];if(get(p,"метка темы"))lines.push("Тематика: "+esc(get(p,"метка темы")));if(j.owner===0)lines.push("Заказчик не зарегистрирован в боте — анкеты и отзывов о нём пока нет.");return send(to,lines.join("\n"),buttons([[["✋ Откликнуться","reply:"+j.id]],[["⚠️ Пожаловаться","reportjob:"+j.id]]]))}
+async function card(to,j){
+ const p=j.body||{},external=j.owner===0;
+ const visible=k=>esc(external?sourceJobDisplayText(get(p,k)):redactContacts(get(p,k)));
+ const lines=[
+ "<b>📢 "+visible("название заявки")+"</b>",
+ "Кого ищу: "+visible("кого ищу"),
+ "Тип работы: "+visible("тип работы"),
+ "Город: "+visible("город"),
+ "Требования: "+(get(p,"требования")?visible("требования"):"не указано"),
+ "Оплата: "+visible("формат и оплата"),
+ "Дата: "+(get(p,"дата съёмки")?visible("дата съёмки"):"не указана"),
+ "",visible("описание")
+ ];
+ if(get(p,"метка темы"))lines.push("Тематика: "+visible("метка темы"));
+ if(external)lines.push("Заказчик не зарегистрирован в боте — сведения о нём не проверены.");
+ return send(to,lines.join("\n"),buttons([[["✋ Откликнуться","reply:"+j.id]],[["⚠️ Пожаловаться","reportjob:"+j.id]]]));
+}
 async function matches(u,j){
  if(!u||u.blocked||u.suspended||!u.active||!allConsentsCurrent(u.consent,await currentDocumentHashes())||!eligibleProfile(u.profile,u.photo)||j.paused||j.status!=="active")return false;
  const p=u.profile;
@@ -378,7 +394,7 @@ async function onMessage(m){
   await send(id,"Эта анкета сейчас не участвует в поиске.");return begin(u);
  }
  return begin(u);
-}if(t==="/support"){await change(id,{state:"support"});return send(id,"Опишите проблему одним сообщением.");}if(admin.includes(String(id))&&t==="/stats"){let a=await sql("SELECT (SELECT count(*) FROM mm_users)::int AS users,(SELECT count(*) FROM mm_jobs)::int AS jobs,(SELECT count(*) FROM mm_reports)::int AS reports");return send(id,JSON.stringify(a[0]));}if((u.blocked||u.suspended)&&u.state!=="support")return send(id,"Ваш профиль ограничен; напишите /support.");if(u.state!=="reply_compose"&&t&&!t.startsWith("/")&&await feedbackText(id,t,sql,send))return; if(m.contact){
+}if(t==="/support"){await change(id,{state:"support"});return send(id,"Опишите проблему одним сообщением.");}if(admin.includes(String(id))&&t==="/stats"){let a=await sql("SELECT (SELECT count(*) FROM mm_users)::int AS users,(SELECT count(*) FROM mm_jobs)::int AS jobs,(SELECT count(*) FROM mm_reports)::int AS reports");return send(id,JSON.stringify(a[0]));}if((u.blocked||u.suspended)&&u.state!=="support")return send(id,"Ваш профиль ограничен; напишите /support.");if(u.state===""&&t&&!t.startsWith("/")&&await feedbackText(id,t,sql,send))return; if(m.contact){
  if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))return begin(u);
  if(!m.contact.user_id||Number(m.contact.user_id)!==Number(id))return send(id,"Поделитесь своим номером через кнопку Telegram.");
  if(!m.contact.phone_number)return send(id,"Номер не получен. Используйте кнопку подтверждения.");
