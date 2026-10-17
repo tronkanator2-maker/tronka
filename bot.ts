@@ -499,7 +499,7 @@ async function onMessage(m){
   return send(m.from.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации документов и проверки интеграций. Пока можно посмотреть демонстрацию.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));
  }
  let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
- if(t==="/cancel"){const f=discardProfileDraft(u.filters);delete f.replyJobId;delete f.draft;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
+ if(t==="/cancel"){const f=discardProfileDraft(u.filters);delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
  if(t==="/teststatus")return send(id,testMode()?"🧪 Тестовый режим активен. Регистрация открыта: "+(testReady()?"да":"нет")+"\nПлатежи отключены.\nТелефон не требуется.":"Тестовый режим выключен.");if(t==="/mydata"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Данных нет.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Не получилось отправить архив. Попробуйте позже.");return;}
  if(t==="/deleteaccount"){await change(id,{state:"delete_confirm"});return send(id,"<b>Удалить аккаунт и данные?</b>\nЭто удалит анкету, фотографии из нашей базы, ваши заявки, историю откликов, отзывов, приглашений, согласий и обращений. Сообщения, ранее отправленные другим пользователям Telegram, стереть удалённо нельзя.\n\nПодтвердите удаление отдельной кнопкой.",buttons([[["❌ Удалить мои данные","deleteaccount:confirm"]],[["Отмена","deleteaccount:cancel"]]]));}if(t==="/subscription"&&testMode())return send(id,"🧪 Тестовый доступ: лимиты заявок, откликов и приглашений для проверки сняты. Настоящие платежи выключены.");if(t==="/subscription")return send(id,hasPaidAccess(u)?"⭐ Подписка или пробный период активны до "+esc(new Date(u.access_until&&new Date(u.access_until)>new Date(u.trial_until||0)?u.access_until:u.trial_until).toLocaleDateString("ru-RU")):"Бесплатный доступ: один отклик, одна заявка и одно приглашение в календарную неделю.");if(t.startsWith("/start")){
  const payload=t.trim().split(/\s+/)[1]||"";
@@ -598,15 +598,16 @@ async function onCallback(c){
  if(a==="test:agree"){
   if(!testMode()||!testReady())return send(id,"Тестовая регистрация сейчас недоступна.");
   const consent={...(u.consent||{}),test_access:true,test_at:new Date().toISOString()};
-  await change(id,{consent});return begin({...u,consent});
+  await change(id,{consent,active:true});return begin({...u,consent,active:true});
  }
  if(a==="test:revoke"){
   if(!testMode())return send(id,"Эта функция доступна только в тестовом режиме.");
   const consent={...(u.consent||{}),test_access:false,test_revoked_at:new Date().toISOString()};
-  await change(id,{consent});
+  await change(id,{consent,active:false,state:""});
+  await sql("UPDATE mm_jobs SET paused=TRUE WHERE owner=$1 AND status='active'",id);
   return send(id,"Тестовое согласие отозвано. Анкета больше не участвует в подборе. Удалить все данные: /deleteaccount");
  }
- if(a==="privacy")return send(id,"🔐 <b>Данные и приватность</b>\nЭкспорт показывает сведения, сохранённые сервисом. Удаление аккаунта безвозвратное; ранее отправленные Telegram-сообщения других людей останутся.",buttons([[["📦 Экспорт данных","privacy:export"]],[["🗑 Удалить аккаунт","privacy:delete"]],[["◀️ В меню","home"]]]));
+ if(a==="privacy")return send(id,"🔐 <b>Данные и приватность</b>\nЭкспорт показывает сведения, сохранённые сервисом. Удаление аккаунта безвозвратное; ранее отправленные Telegram-сообщения других людей останутся.",buttons([[["📦 Экспорт данных","privacy:export"]],[["🗑 Удалить аккаунт","privacy:delete"]],...(testMode()?[[["🧪 Отозвать участие в тесте","test:revoke"]]]:[]),[["◀️ В меню","home"]]]));
  if(a==="privacy:export"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Сведения ещё не сохранены.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Ошибка отправки файла.");return;}
  if(a==="privacy:delete"){await change(id,{state:"delete_confirm"});return send(id,"<b>Подтвердите окончательное удаление</b>\nАнкета, фото и объявления будут удалены из базы. Уже отправленные сообщения в чужих Telegram-чатах сохранятся.",buttons([[["Да, удалить всё","deleteaccount:confirm"]],[["Отменить","deleteaccount:cancel"]]]));}
  if(a==="deleteaccount:cancel"){await change(id,{state:""});return send(id,"Удаление отменено.",menu);}
