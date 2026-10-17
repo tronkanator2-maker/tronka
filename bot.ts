@@ -1,5 +1,6 @@
 import {SQL} from "bun";
 import {adminApp} from "./admin.ts";
+import {setupSourceHealth,allowanceForModel,reviewSourceHealth} from "./source-health.ts";
 import {payMatches,formatMatches} from "./pricing.ts";
 import {exportAccount,deleteAccount,sendAccountExport} from "./privacy.ts";
 import {parseWithModel} from "./ai-parser.ts";
@@ -51,6 +52,7 @@ await sql("CREATE INDEX IF NOT EXISTS mm_support_message_ticket ON mm_support_me
 await setupFeedback(sql);
 await prepareEntitlements(sql);
 await prepareDocuments(sql);
+await setupSourceHealth(sql);
 
 }
 let ready;function ensure(){return ready??=(setup().catch(e=>{ready=null;throw e}))}
@@ -422,8 +424,12 @@ async function onSourcePost(m) {
  const exists=await sql("SELECT 1 FROM mm_source_posts WHERE source_id=$1 AND telegram_message_id=$2",sourceId,m.message_id);
  if(exists.length)return;
  const decision=moderate(raw.replace(/(?:https?:\/\/)?t\.me\/[a-zA-Z0-9_]{5,32}/gi,""));
- // Rules always decide safety. AI is an optional extraction fallback only.
- const parsed=parseSourcePost(raw,{city:settings.city,topic:settings.topic}) || (decision.status!=="reject" ? await parseWithModel(raw,{city:settings.city,topic:settings.topic}) : null);
+ await sql("UPDATE mm_sources SET last_seen_at=NOW() WHERE id=$1",sourceId);
+ // AI is optional and budgeted: don't send ordinary unrelated chat traffic.
+ let parsed=parseSourcePost(raw,{city:settings.city,topic:settings.topic});
+ if(!parsed && decision.status!=="reject" && /модел|акт[её]р|кастинг|массовк|съемк|съёмк|фотограф|видеограф|визажист/i.test(raw) && extractContact(raw) && Bun.env.OPENROUTER_API_KEY && Bun.env.OPENROUTER_MODEL && await allowanceForModel(sql,sourceId)){
+  parsed=await parseWithModel(raw,{city:settings.city,topic:settings.topic});
+ }
  let state=decision.status==="reject"?"rejected":decision.status==="review"?"pending":"active";
  if(!parsed)state="rejected";
  if(parsed && /(?:несовершеннолет|до\s+1[0-7]\s+лет|дети\s+1[0-7]\s+лет)/i.test(raw))state="pending";
@@ -546,6 +552,7 @@ Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){
  return new Response("ok")}catch(e){console.error("Update error",e);return new Response("error",{status:500})}}return new Response("World Models Bot")}})
 setInterval(()=>ensure().then(()=>feedbackTick(sql,send)).catch(e=>console.error("feedback job",String(e))),60*60*1000);
 setInterval(()=>runFanoutBatch().catch(e=>console.error("fanout tick",String(e))),5000);
+setInterval(()=>ensure().then(()=>reviewSourceHealth(sql)).catch(e=>console.error("source health",String(e))),24*60*60*1000);
 setInterval(()=>ensure().then(async()=>{
  await sql("DELETE FROM mm_updates WHERE created_at<NOW()-INTERVAL '30 days'");
  await sql("DELETE FROM mm_fanout_queue WHERE pending=FALSE AND completed_at<NOW()-INTERVAL '90 days'");
