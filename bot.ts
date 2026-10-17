@@ -20,7 +20,14 @@ const hasPaidAccess=(u,at)=>testMode()||activeSubscription(u,at);
 const legalReady=async query=>canRegister({...Bun.env,REGISTRATION_ENABLED:"true"},await legalDocumentsReady(query));
 const allConsentsCurrent=(c,hashes)=>testMode()?canUseTestFeatures(Bun.env,c):fullConsentsCurrent(c,hashes);
 const testReady=()=>Bun.env.REGISTRATION_ENABLED==="true";
-const menu={inline_keyboard:[[{text:"👤 Моя анкета",callback_data:"profile"},{text:"🎯 Фильтры",callback_data:"filters"}],[{text:"📢 Найти заявки",callback_data:"jobs"},{text:"➕ Разместить",callback_data:"new"}],[{text:"📌 Мои заявки",callback_data:"mine"},{text:"⏸️ Поиск вкл/выкл",callback_data:"pause"}],[{text:"🔎 Анкеты",callback_data:"browse:0"},{text:"📚 Статьи",callback_data:"articles"}],[{text:"🎁 Пригласить друга",callback_data:"invitefriend"},{text:"❓ Поддержка",callback_data:"support"}],[{text:"🔐 Мои данные",callback_data:"privacy"}]]};
+const menu={inline_keyboard:[
+ [{text:"👤 Моя анкета",callback_data:"profile"},{text:"🔎 Анкеты",callback_data:"browse:0"}],
+ [{text:"📢 Найти заявки",callback_data:"jobs"},{text:"➕ Создать заявку",callback_data:"new"}],
+ [{text:"🎯 Фильтры",callback_data:"filters"},{text:"📌 Мои заявки",callback_data:"mine"}],
+ [{text:"📬 Мои отклики",callback_data:"myresponses"},{text:"✉️ Приглашения",callback_data:"myinvites"}],
+ [{text:"⏸️ Поиск вкл/выкл",callback_data:"pause"},{text:"ℹ️ Как работает",callback_data:"how"}],
+ [{text:"⚙️ Ещё",callback_data:"more"}]
+]};
 const esc=s=>String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
 async function sql(q,...v){return db.unsafe(q,v)}
 async function setup(){
@@ -611,7 +618,28 @@ async function onCallback(c){
  const base=(Bun.env.PUBLIC_URL||"").replace(/\/$/,"");
  return send(id,"📚 <b>Полезные статьи</b>\nВыберите тему:",{inline_keyboard:available.map(d=>[{text:d.title,url:base+"/documents/"+encodeURIComponent(d.slug)}])});
 }
-if(a==="invitefriend"){
+if(a==="more")return send(id,"⚙️ <b>Дополнительно</b>\nИнформация о проекте, приватность и поддержка.",buttons([
+ [["📚 Статьи","articles"],["🎁 Пригласить друга","invitefriend"]],
+ [["🔐 Личные данные","privacy"],["❓ Поддержка","support"]],
+ [["🧪 Доступ и подписка","access_info"],["🏠 В меню","home"]]
+]));
+ if(a==="how")return send(id,"<b>Как работает «Мир моделей»</b>\n\n1. Создайте анкету — можно отвечать по шагам.\n2. Прикрепите ключевое фото (до пяти).\n3. Настройте фильтры по городу, типу работы и оплате.\n4. Найдите заявку и отправьте персональный отклик либо разместите свою заявку.\n5. Принимайте приглашения и отклики, затем договаривайтесь напрямую.\n\n🧪 Пока включено тестирование: используйте только вымышленные данные. Платежи не работают.",buttons([[["👤 Создать анкету","profile"],["📢 Посмотреть заявки","jobs"]],[["🏠 В меню","home"]]]));
+ if(a==="access_info")return send(id,testMode()?"🧪 <b>Тестовый доступ открыт</b>\nОплата отключена, лимиты для тестирования сняты. Тестовые данные будут удалены при подготовке к коммерческому запуску.":"Пробный и платный доступ проверяются по текущей подписке.");
+ if(a==="myresponses"){
+  const responses=await sql("SELECT r.id,r.job_id,r.status,r.created_at,j.body FROM mm_responses r LEFT JOIN mm_jobs j ON j.id=r.job_id WHERE r.user_id=$1 ORDER BY r.created_at DESC LIMIT 15",id);
+  if(!responses.length)return send(id,"Вы ещё не отправляли отклики.",buttons([[["📢 Найти заявки","jobs"],["🏠 В меню","home"]]]));
+  const labels={pending:"🕓 Ожидает",accepted:"✅ Принят",declined:"❌ Отклонён"};
+  const lines=responses.map(r=>"№"+r.id+" · "+esc(get(r.body||{},"название заявки")||"Заявка №"+r.job_id)+" — "+(labels[r.status]||esc(r.status||"отправлен")));
+  return send(id,"📬 <b>Ваши последние отклики</b>\n\n"+lines.join("\n"),buttons([[["📢 Найти заявки","jobs"],["🏠 В меню","home"]]]));
+ }
+ if(a==="myinvites"){
+  const invitations=await sql("SELECT id,from_user,to_user,status,created_at FROM mm_invitations WHERE from_user=$1 OR to_user=$1 ORDER BY created_at DESC LIMIT 20",id);
+  if(!invitations.length)return send(id,"Приглашений пока нет.",buttons([[["🔎 Каталог анкет","browse:0"],["🏠 В меню","home"]]]));
+  const labels={sent:"🕓 Ожидает",accepted:"✅ Принято",declined:"❌ Отклонено"};
+  const lines=invitations.map(inv=>(Number(inv.from_user)===Number(id)?"📤 Исходящее":"📥 Входящее")+" №"+inv.id+" — "+(labels[inv.status]||esc(inv.status||"неизвестно")));
+  return send(id,"✉️ <b>Ваши приглашения</b>\n\n"+lines.join("\n"),buttons([[["🔎 Каталог анкет","browse:0"],["🏠 В меню","home"]]]));
+ }
+ if(a==="invitefriend"){
  const whoAmI=await call("getMe",{});const name=whoAmI.ok?whoAmI.result.username:(Bun.env.BOT_USERNAME||"").replace(/^@/,"");
  if(!name)return send(id,"Ссылка для приглашения пока недоступна.");
  const link="https://t.me/"+name+"?start=ref_"+id;
