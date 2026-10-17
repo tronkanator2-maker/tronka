@@ -343,7 +343,7 @@ async function submitResponse(u,body){
   }
   return send(id,"Отклик учтён. Контакт автора объявления: "+esc(contact)+"\nВаш текст: "+esc(message));
  }
- if(owner?.username)return send(id,"Отклик сохранён и отправлен заказчику. Вы также можете открыть его профиль:",{inline_keyboard:[[{text:"✉️ Открыть диалог",url:"https://t.me/"+owner.username}]]});
+ if(owner)return send(id,"✅ Отклик сохранён и отправлен заказчику. Его контакт откроется, если он примет отклик.");
  return send(id,owner?"Отклик сохранён и отправлен заказчику.":"Отклик сохранён, но у внешнего объявления нет доступного контакта.");
 }
 
@@ -577,8 +577,10 @@ if(a.startsWith("acceptresponse:")){
  if(!rows.length)return send(id,"Отклик уже обработан.");
  const j=(await sql("SELECT body FROM mm_jobs WHERE id=$1",rows[0].job_id))[0];
  await scheduleFeedback(sql,"response",rows[0].id,id,rows[0].user_id,get(j.body,"дата съёмки"));
- await send(id,"Отклик принят. Вы можете договориться о деталях напрямую.");
- await send(rows[0].user_id,"✅ Ваш отклик принят! Теперь можно согласовать детали с автором заявки.");
+ const applicant=(await sql("SELECT username FROM mm_users WHERE id=$1",rows[0].user_id))[0];
+ const client=(await sql("SELECT username FROM mm_users WHERE id=$1",id))[0];
+ await send(id,"✅ Отклик принят. Теперь можно обсудить детали напрямую.",applicant?.username?{inline_keyboard:[[{text:"✉️ Написать откликнувшемуся",url:"https://t.me/"+applicant.username}]]}:undefined);
+ await send(rows[0].user_id,"✅ Ваш отклик принят! Можно согласовать детали напрямую.",client?.username?{inline_keyboard:[[{text:"✉️ Написать заказчику",url:"https://t.me/"+client.username}]]}:undefined);
  return;
 }
 if(a.startsWith("declineresponse:")){
