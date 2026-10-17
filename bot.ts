@@ -463,7 +463,8 @@ async function onSourcePost(m) {
  if(!parsed && decision.status!=="reject" && /модел|акт[её]р|кастинг|массовк|съемк|съёмк|фотограф|видеограф|визажист/i.test(raw) && extractContact(raw) && Bun.env.OPENROUTER_API_KEY && Bun.env.OPENROUTER_MODEL && await allowanceForModel(sql,sourceId)){
   parsed=await parseWithModel(raw,{city:settings.city,topic:settings.topic});
  }
- let state=decision.status==="reject"?"rejected":decision.status==="review"?"pending":"active";
+ const extractedDecision=parsed?moderate(Object.values(parsed).join(" ")):{status:"accept"};
+ let state=decision.status==="reject"||extractedDecision.status==="reject"?"rejected":decision.status==="review"||extractedDecision.status==="review"?"pending":"active";
  if(!parsed)state="rejected";
  if(parsed && /(?:несовершеннолет|до\s+1[0-7]\s+лет|дети\s+1[0-7]\s+лет)/i.test(raw))state="pending";
  let job=null;
