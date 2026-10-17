@@ -22,8 +22,8 @@ export async function exportAccount(sql,id){
 export async function deleteAccount(sql,id){
  // Ignore log/report snapshots of 3rd parties that cannot be erased from their Telegram chats.
  // Remove dependent rows before parents to keep the process safe to repeat after interruption.
- await sql("DELETE FROM mm_support_messages WHERE ticket_id IN (SELECT id FROM mm_reports_v2 WHERE reporter=$1 OR target_user=$1)",id);
- await sql("DELETE FROM mm_reports_v2 WHERE reporter=$1 OR target_user=$1",id);
+ await sql("DELETE FROM mm_support_messages WHERE ticket_id IN (SELECT id FROM mm_reports_v2 WHERE reporter=$1 OR target_user=$1 OR target_job IN (SELECT id FROM mm_jobs WHERE owner=$1))",id);
+ await sql("DELETE FROM mm_reports_v2 WHERE reporter=$1 OR target_user=$1 OR target_job IN (SELECT id FROM mm_jobs WHERE owner=$1)",id);
  await sql("DELETE FROM mm_consent_events WHERE telegram_user=$1",id);
  await sql("DELETE FROM mm_review_drafts WHERE user_id=$1",id);
  await sql("DELETE FROM mm_feedback_checks WHERE actor=$1 OR target=$1",id);
@@ -31,6 +31,7 @@ export async function deleteAccount(sql,id){
  await sql("DELETE FROM mm_invitations WHERE from_user=$1 OR to_user=$1",id);
  await sql("DELETE FROM mm_referrals WHERE inviter=$1 OR invitee=$1",id);
  await sql("DELETE FROM mm_trial_ledger WHERE first_user=$1",id);
+ await sql("DELETE FROM mm_admin_log WHERE actor=$1 OR details->>\'target\'=$2",id,String(id));
  await sql("DELETE FROM mm_profile_deliveries WHERE user_id=$1 OR job_id IN (SELECT id FROM mm_jobs WHERE owner=$1)",id);
  await sql("DELETE FROM mm_deliveries WHERE user_id=$1 OR job_id IN (SELECT id FROM mm_jobs WHERE owner=$1)",id);
  await sql("DELETE FROM mm_responses WHERE user_id=$1 OR job_id IN (SELECT id FROM mm_jobs WHERE owner=$1)",id);
