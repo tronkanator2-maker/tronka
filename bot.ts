@@ -19,6 +19,8 @@ await sql("CREATE TABLE IF NOT EXISTS mm_jobs(id BIGSERIAL PRIMARY KEY,owner BIG
 await sql("CREATE TABLE IF NOT EXISTS mm_responses(id BIGSERIAL PRIMARY KEY,job_id BIGINT NOT NULL,user_id BIGINT NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),UNIQUE(job_id,user_id))");
 await sql("CREATE TABLE IF NOT EXISTS mm_reports(id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL,body TEXT,created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("CREATE TABLE IF NOT EXISTS mm_updates(id BIGINT PRIMARY KEY)");
+await sql("ALTER TABLE mm_updates ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
+await sql("CREATE INDEX IF NOT EXISTS mm_update_age ON mm_updates(created_at)");
 await sql("CREATE TABLE IF NOT EXISTS mm_sources(id BIGINT PRIMARY KEY,title TEXT DEFAULT '',city TEXT DEFAULT '',topic TEXT DEFAULT '',active BOOLEAN DEFAULT TRUE,created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("CREATE TABLE IF NOT EXISTS mm_source_posts(source_id BIGINT NOT NULL,telegram_message_id BIGINT NOT NULL,job_id BIGINT,moderation TEXT NOT NULL,reason TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(source_id,telegram_message_id))");
 await sql("CREATE TABLE IF NOT EXISTS mm_source_blacklist(source_id BIGINT NOT NULL,contact TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(source_id,contact))");
@@ -511,7 +513,11 @@ async function saveReport(u,txt,photo=null){
  await send(u.id,"Обращение записано. Модератор сможет его проверить.");
 }
 
-Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){await ensure();const documents=await publicDocumentRoute(r,sql);if(documents)return documents;const dashboard=await adminApp(r,sql,dispatch,async (id,message)=>{
+Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){
+ try{await ensure()}catch(e){
+  console.error("Database not ready:",String(e));
+  return new Response("Service temporarily unavailable",{status:503,headers:{"cache-control":"no-store"}});
+ }const documents=await publicDocumentRoute(r,sql);if(documents)return documents;const dashboard=await adminApp(r,sql,dispatch,async (id,message)=>{
  const reports=await sql("SELECT * FROM mm_reports_v2 WHERE id=$1",id);
  if(!reports.length)throw Error("Обращение не найдено");
  const target=reports[0].reporter;
@@ -529,5 +535,9 @@ Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){awa
  return new Response("ok")}catch(e){console.error("Update error",e);return new Response("error",{status:500})}}return new Response("World Models Bot")}})
 setInterval(()=>ensure().then(()=>feedbackTick(sql,send)).catch(e=>console.error("feedback job",String(e))),60*60*1000);
 setInterval(()=>runFanoutBatch().catch(e=>console.error("fanout tick",String(e))),5000);
+setInterval(()=>ensure().then(async()=>{
+ await sql("DELETE FROM mm_updates WHERE created_at<NOW()-INTERVAL '30 days'");
+ await sql("DELETE FROM mm_fanout_queue WHERE pending=FALSE AND completed_at<NOW()-INTERVAL '90 days'");
+ }).catch(e=>console.error("maintenance",String(e))),24*60*60*1000);
 setTimeout(()=>runFanoutBatch().catch(e=>console.error("fanout startup",String(e))),4000);
 if(token&&secret&&Bun.env.PUBLIC_URL)call("setWebhook",{url:Bun.env.PUBLIC_URL.replace(/\/$/,"")+"/webhook",secret_token:secret,allowed_updates:["message","channel_post","callback_query"]}).then(r=>console.log("Webhook configured",r.ok)).catch(console.error);
