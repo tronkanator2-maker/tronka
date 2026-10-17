@@ -23,6 +23,8 @@ await sql("CREATE TABLE IF NOT EXISTS mm_sources(id BIGINT PRIMARY KEY,title TEX
 await sql("CREATE TABLE IF NOT EXISTS mm_source_posts(source_id BIGINT NOT NULL,telegram_message_id BIGINT NOT NULL,job_id BIGINT,moderation TEXT NOT NULL,reason TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(source_id,telegram_message_id))");
 await sql("CREATE TABLE IF NOT EXISTS mm_source_blacklist(source_id BIGINT NOT NULL,contact TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(source_id,contact))");
 await sql("CREATE TABLE IF NOT EXISTS mm_deliveries(user_id BIGINT NOT NULL,job_id BIGINT NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(user_id,job_id))");
+await sql("CREATE TABLE IF NOT EXISTS mm_fanout_queue(job_id BIGINT PRIMARY KEY, cursor_id BIGINT NOT NULL DEFAULT 0,profiles_done BOOLEAN NOT NULL DEFAULT FALSE,pending BOOLEAN NOT NULL DEFAULT TRUE,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),completed_at TIMESTAMPTZ)");
+await sql("CREATE INDEX IF NOT EXISTS mm_fanout_ready ON mm_fanout_queue(next_attempt_at) WHERE pending=TRUE");
 await sql("CREATE TABLE IF NOT EXISTS mm_reports_v2(id BIGSERIAL PRIMARY KEY,reporter BIGINT NOT NULL,target_user BIGINT,target_job BIGINT,kind TEXT NOT NULL DEFAULT 'support',body TEXT NOT NULL DEFAULT '',photo TEXT,created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("CREATE TABLE IF NOT EXISTS mm_profile_deliveries(job_id BIGINT NOT NULL,user_id BIGINT NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(job_id,user_id))");
 await sql("CREATE TABLE IF NOT EXISTS mm_invitations(id BIGSERIAL PRIMARY KEY,from_user BIGINT NOT NULL,to_user BIGINT NOT NULL,job_id BIGINT,status TEXT DEFAULT 'sent',created_at TIMESTAMPTZ DEFAULT NOW())");
@@ -132,7 +134,47 @@ async function safetyOnce(u){
  const r=await sql("UPDATE mm_users SET first_safety_sent_at=NOW() WHERE id=$1 AND first_safety_sent_at IS NULL RETURNING id",u.id);
  if(r.length)await send(u.id,"<b>Безопасность</b>\nМир моделей помогает с поиском, но не организует съёмки и не участвует в оплате. Проверяйте условия, не переводите деньги за сомнительные кастинги и сообщайте о подозрительных предложениях через поддержку.");
 }
-async function dispatch(j){const users=await sql("SELECT * FROM mm_users WHERE blocked=FALSE AND suspended=FALSE AND active=TRUE AND photo IS NOT NULL AND id<>$1",j.owner);for(const u of users)try{await deliverTo(u,j)}catch(e){console.error("delivery",u.id,String(e))}}
+// Webhooks enqueue work; a durable worker sends to recipients in bounded batches.
+async function dispatch(j){
+ await sql("INSERT INTO mm_fanout_queue(job_id) VALUES($1) ON CONFLICT(job_id) DO UPDATE SET pending=TRUE,completed_at=NULL,next_attempt_at=NOW()",j.id);
+}
+let fanoutRunning=false;
+async function runFanoutBatch(){
+ if(fanoutRunning)return;
+ fanoutRunning=true;
+ let jobId=null;
+ try{
+  await ensure();
+  const queue=(await sql("SELECT * FROM mm_fanout_queue WHERE pending=TRUE AND next_attempt_at<=NOW() ORDER BY next_attempt_at,created_at LIMIT 1"))[0];
+  if(!queue)return;
+  jobId=queue.job_id;
+  const job=(await sql("SELECT * FROM mm_jobs WHERE id=$1",jobId))[0];
+  if(!job||job.status!=="active"||job.paused||new Date(job.expires_at)<=new Date()){
+   await sql("UPDATE mm_fanout_queue SET pending=FALSE,completed_at=NOW() WHERE job_id=$1",jobId);return;
+  }
+  if(!queue.profiles_done){
+   await matchingProfilesForJob(job);
+   await sql("UPDATE mm_fanout_queue SET profiles_done=TRUE WHERE job_id=$1",jobId);
+  }
+  const users=await sql("SELECT * FROM mm_users WHERE id>$1 AND id<>$2 ORDER BY id ASC LIMIT 20",queue.cursor_id,job.owner);
+  if(!users.length){
+   await sql("UPDATE mm_fanout_queue SET pending=FALSE,completed_at=NOW(),attempts=0 WHERE job_id=$1",jobId);return;
+  }
+  let last=queue.cursor_id;
+  for(const user of users){
+   // Each deliverTo records delivery idempotently and handles duplicate messages.
+   if(user.active&&!user.blocked&&!user.suspended&&user.photo)await deliverTo(user,job);
+   last=user.id;
+   await sql("UPDATE mm_fanout_queue SET cursor_id=$1,attempts=0,next_attempt_at=NOW()+INTERVAL '2 seconds' WHERE job_id=$2",last,jobId);
+  }
+ }catch(e){
+  console.error("fanout batch",String(e));
+  if(jobId!==null)try{
+   await sql("UPDATE mm_fanout_queue SET attempts=attempts+1,next_attempt_at=NOW()+INTERVAL '30 seconds' WHERE job_id=$1",jobId);
+  }catch(dbErr){console.error("fanout retry",String(dbErr))}
+ }finally{fanoutRunning=false}
+}
+
 async function sendMatchedProfile(job,p){
  if(job.owner===p.id||job.owner===0||job.paused||job.status!=="active")return false;
  if(!p.active||p.blocked||p.suspended||!allConsentsCurrent(p.consent,await currentDocumentHashes())||!eligibleProfile(p.profile,p.photo))return false;
@@ -293,7 +335,7 @@ if(a==="invitefriend"){
 }
 if(a==="docs")return send(id,"Все опубликованные документы сервиса: "+esc((Bun.env.PUBLIC_URL||"").replace(/\/$/,"")+"/documents"));if(a==="go")return begin(u);
  if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))return begin(u);if(!u.phone||!u.username)return begin(u);if(a==="profile"){if(Object.keys(u.profile||{}).length)await profile(id,u,"Ваша анкета");return send(id,"Анкета редактируется одним текстовым сообщением.",buttons([[["✏️ Заполнить или изменить","edit_profile"],["📷 Добавить фото","addphoto"]]]))}if(a==="edit_profile"){if(Object.keys(u.profile||{}).length){await change(id,{state:"profile"});return send(id,"Чтобы изменить один пункт, пришлите его название и новое значение. Например:\n<code>Город: Москва, Казань</code>");}return send(id,"Выберите шаблон анкеты:",buttons([[["🎬 Модель / актёр","template_model"],["📸 Специалист / бренд","template_client"]]]))}
-if(a==="template_model"||a==="template_client"){await change(id,{state:"profile"});const tpl=a==="template_model"?profileTpl:clientTpl;return send(id,"Скопируйте шаблон, заполните и отправьте отдельным сообщением:\n<code>"+esc(tpl)+"</code>")}if(a==="profile_save"){await change(id,{state:""});if(u.photo){const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await profileBackfill(fresh);await backfill(fresh)}return send(id,"Анкета сохранена! Теперь добавьте ключевое фото.",buttons([[["📷 Добавить фото","addphoto"]]]))}if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправьте 1–5 фотографий: по одной или альбомом. Первая станет ключевой.",buttons([[["✅ Готово","photo_done"]]]))}if(a==="photo_done"){await change(id,{state:""});const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];if(fresh.photo){await backfill(fresh);await profileBackfill(fresh)}return send(id,fresh.photo?"Фото сохранены ✅":"Можно добавить фото позже, но для подбора нужно ключевое фото.",menu)}if(a==="new"){await change(id,{state:"job"});return send(id,"Скопируйте и заполните шаблон заявки одним сообщением:\n<code>"+esc(jobTpl)+"</code>")}if(a==="publish"){let p=u.filters?.draft;if(!p)return send(id,"Черновик не найден.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].total)return send(id,"Без подписки можно разместить одну новую заявку с понедельника по воскресенье.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const row=(await sql("INSERT INTO mm_jobs(owner,body,expires_at) VALUES($1,$2::jsonb,$3) RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString()))[0];await change(id,{state:"",filters:Object.fromEntries(Object.entries(u.filters).filter(([k])=>k!=="draft"))});await send(id,"Заявка №"+row.id+" опубликована.");await dispatch(row);await matchingProfilesForJob(row);return}if(a==="jobs"){
+if(a==="template_model"||a==="template_client"){await change(id,{state:"profile"});const tpl=a==="template_model"?profileTpl:clientTpl;return send(id,"Скопируйте шаблон, заполните и отправьте отдельным сообщением:\n<code>"+esc(tpl)+"</code>")}if(a==="profile_save"){await change(id,{state:""});if(u.photo){const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await profileBackfill(fresh);await backfill(fresh)}return send(id,"Анкета сохранена! Теперь добавьте ключевое фото.",buttons([[["📷 Добавить фото","addphoto"]]]))}if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправьте 1–5 фотографий: по одной или альбомом. Первая станет ключевой.",buttons([[["✅ Готово","photo_done"]]]))}if(a==="photo_done"){await change(id,{state:""});const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];if(fresh.photo){await backfill(fresh);await profileBackfill(fresh)}return send(id,fresh.photo?"Фото сохранены ✅":"Можно добавить фото позже, но для подбора нужно ключевое фото.",menu)}if(a==="new"){await change(id,{state:"job"});return send(id,"Скопируйте и заполните шаблон заявки одним сообщением:\n<code>"+esc(jobTpl)+"</code>")}if(a==="publish"){let p=u.filters?.draft;if(!p)return send(id,"Черновик не найден.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].total)return send(id,"Без подписки можно разместить одну новую заявку с понедельника по воскресенье.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const row=(await sql("INSERT INTO mm_jobs(owner,body,expires_at) VALUES($1,$2::jsonb,$3) RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString()))[0];await change(id,{state:"",filters:Object.fromEntries(Object.entries(u.filters).filter(([k])=>k!=="draft"))});await send(id,"Заявка №"+row.id+" опубликована.");await dispatch(row);return}if(a==="jobs"){
  const js=await matchingJobs(u,30);
  if(!js.length)return send(id,eligibleProfile(u.profile,u.photo)?"По вашим фильтрам подходящих заявок сейчас нет.":"Добавьте ключевое фото и заполните обязательные поля анкеты, чтобы запустить подбор.",buttons([[["🎯 Фильтры","filters"],["👤 Анкета","profile"]]]));
  for(const j of js)await card(id,j);
@@ -486,4 +528,6 @@ Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){awa
  }
  return new Response("ok")}catch(e){console.error("Update error",e);return new Response("error",{status:500})}}return new Response("World Models Bot")}})
 setInterval(()=>ensure().then(()=>feedbackTick(sql,send)).catch(e=>console.error("feedback job",String(e))),60*60*1000);
+setInterval(()=>runFanoutBatch().catch(e=>console.error("fanout tick",String(e))),5000);
+setTimeout(()=>runFanoutBatch().catch(e=>console.error("fanout startup",String(e))),4000);
 if(token&&secret&&Bun.env.PUBLIC_URL)call("setWebhook",{url:Bun.env.PUBLIC_URL.replace(/\/$/,"")+"/webhook",secret_token:secret,allowed_updates:["message","channel_post","callback_query"]}).then(r=>console.log("Webhook configured",r.ok)).catch(console.error);
