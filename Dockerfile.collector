@@ -3,4 +3,5 @@ WORKDIR /app
 COPY collector/package.json ./package.json
 RUN bun install --production
 COPY collector.ts engine.ts ./
+RUN bun build --target=bun collector.ts --outdir /tmp/collector-check
 CMD ["bun","run","collector.ts"]
