@@ -21,6 +21,8 @@ await sql("CREATE TABLE IF NOT EXISTS mm_users(id BIGINT PRIMARY KEY, username T
 await sql("CREATE TABLE IF NOT EXISTS mm_jobs(id BIGSERIAL PRIMARY KEY,owner BIGINT NOT NULL,body JSONB NOT NULL,status TEXT DEFAULT 'active',created_at TIMESTAMPTZ DEFAULT NOW(),expires_at TIMESTAMPTZ DEFAULT NOW()+INTERVAL '14 days')");
 await sql("CREATE TABLE IF NOT EXISTS mm_responses(id BIGSERIAL PRIMARY KEY,job_id BIGINT NOT NULL,user_id BIGINT NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),UNIQUE(job_id,user_id))");
 await sql("ALTER TABLE mm_responses ADD COLUMN IF NOT EXISTS message TEXT NOT NULL DEFAULT ''");
+await sql("CREATE TABLE IF NOT EXISTS mm_response_outbox(response_id BIGINT PRIMARY KEY,step INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),completed_at TIMESTAMPTZ)");
+await sql("CREATE INDEX IF NOT EXISTS mm_response_outbox_ready ON mm_response_outbox(next_attempt_at) WHERE completed_at IS NULL");
 await sql("CREATE TABLE IF NOT EXISTS mm_reports(id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL,body TEXT,created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("CREATE TABLE IF NOT EXISTS mm_updates(id BIGINT PRIMARY KEY)");
 await sql("ALTER TABLE mm_updates ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
@@ -328,6 +330,43 @@ async function demoScreen(id,screen="home"){
 }
 
 
+
+let responseWorkerRunning=false;
+async function processResponseOutbox(){
+ if(responseWorkerRunning)return;
+ responseWorkerRunning=true;
+ try{
+  await ensure();
+  const ready=await sql("SELECT o.*,r.job_id,r.user_id,r.message,r.status AS response_status,j.owner,j.status AS job_status,j.paused FROM mm_response_outbox o JOIN mm_responses r ON r.id=o.response_id JOIN mm_jobs j ON j.id=r.job_id WHERE o.completed_at IS NULL AND o.next_attempt_at<=NOW() ORDER BY o.next_attempt_at LIMIT 5");
+  for(const outbox of ready){
+   try{
+    const owner=(await sql("SELECT * FROM mm_users WHERE id=$1",outbox.owner))[0];
+    const applicant=(await sql("SELECT * FROM mm_users WHERE id=$1",outbox.user_id))[0];
+    if(!owner||!applicant||owner.blocked||owner.suspended||!owner.active||outbox.job_status!=="active"||outbox.paused){
+     await sql("UPDATE mm_response_outbox SET completed_at=NOW() WHERE response_id=$1",outbox.response_id);
+     continue;
+    }
+    if(outbox.step===0){
+     const delivered=await send(owner.id,"✉️ <b>Новый отклик на заявку №"+outbox.job_id+"</b>\n\n"+esc(outbox.message));
+     if(!delivered?.ok)throw Error("Telegram reply notification not delivered");
+     await sql("UPDATE mm_response_outbox SET step=1,attempts=0,next_attempt_at=NOW() WHERE response_id=$1",outbox.response_id);
+    }
+    if(outbox.step<=1){
+     const cardResult=await profile(owner.id,applicant,"Анкета откликнувшегося");
+     if(!cardResult?.ok)throw Error("Telegram response profile card not delivered");
+     await sql("UPDATE mm_response_outbox SET step=2,attempts=0,next_attempt_at=NOW() WHERE response_id=$1",outbox.response_id);
+    }
+    const controls=await send(owner.id,"Выберите действие:",buttons([[["✅ Принять отклик","acceptresponse:"+outbox.response_id],["❌ Отклонить","declineresponse:"+outbox.response_id]]]));
+    if(!controls?.ok)throw Error("Telegram response controls not delivered");
+    await sql("UPDATE mm_response_outbox SET completed_at=NOW(),step=3 WHERE response_id=$1",outbox.response_id);
+   }catch(e){
+    console.error("Response outbox:",String(e));
+    await sql("UPDATE mm_response_outbox SET attempts=attempts+1,next_attempt_at=NOW()+make_interval(secs=>LEAST(3600,POWER(2,LEAST(attempts,8))*15)::int) WHERE response_id=$1",outbox.response_id);
+   }
+  }
+ }finally{responseWorkerRunning=false}
+}
+
 async function submitResponse(u,body){
  const id=u.id,jobId=Number(u.filters?.replyJobId),message=String(body||"").trim();
  if(!Number.isSafeInteger(jobId)||jobId<=0)return send(id,"Черновик отклика больше не найден. Найдите заявку заново.");
@@ -344,12 +383,8 @@ async function submitResponse(u,body){
  const f={...(u.filters||{})};delete f.replyJobId;
  await change(id,{state:"",filters:f});
  const owner=j.owner===0?null:(await sql("SELECT * FROM mm_users WHERE id=$1",j.owner))[0];
- if(owner && owner.active&&!owner.blocked&&!owner.suspended){
-  try{
-   await send(owner.id,"✉️ <b>Новый отклик на заявку №"+j.id+"</b>\n\n"+esc(message));
-   await profile(owner.id,u,"Анкета откликнувшегося");
-   await send(owner.id,"Выберите действие:",buttons([[["✅ Принять отклик","acceptresponse:"+inserted[0].id],["❌ Отклонить","declineresponse:"+inserted[0].id]]]));
-  }catch(e){console.error("Could not notify job owner:",String(e))}
+ if(owner){
+  await sql("INSERT INTO mm_response_outbox(response_id) VALUES($1) ON CONFLICT DO NOTHING",inserted[0].id);
  }
  if(j.contact){
   const contact=String(j.contact).trim(),username=contact.replace(/^@/,"");
@@ -359,7 +394,7 @@ async function submitResponse(u,body){
   }
   return send(id,"Отклик учтён. Контакт автора объявления: "+esc(contact)+"\nВаш текст: "+esc(message));
  }
- if(owner)return send(id,"✅ Отклик сохранён и отправлен заказчику. Его контакт откроется, если он примет отклик.");
+ if(owner)return send(id,"✅ Отклик сохранён. Уведомление заказчику поставлено в очередь, контакт откроется после принятия.");
  return send(id,owner?"Отклик сохранён и отправлен заказчику.":"Отклик сохранён, но у внешнего объявления нет доступного контакта.");
 }
 
@@ -767,6 +802,7 @@ Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){
  return new Response("ok")}catch(e){console.error("Update error",e);return new Response("error",{status:500})}}return new Response("World Models Bot")}})
 setInterval(()=>ensure().then(()=>feedbackTick(sql,send)).catch(e=>console.error("feedback job",String(e))),60*60*1000);
 setInterval(()=>runFanoutBatch().catch(e=>console.error("fanout tick",String(e))),5000);
+setInterval(()=>processResponseOutbox().catch(e=>console.error("response outbox tick",String(e))),5000);
 setInterval(()=>consumeCollectorInbox().catch(e=>console.error("collector inbox",String(e))),5000);
 setInterval(()=>ensure().then(()=>reviewSourceHealth(sql)).catch(e=>console.error("source health",String(e))),24*60*60*1000);
 setInterval(()=>ensure().then(async()=>{
