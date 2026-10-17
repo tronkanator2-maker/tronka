@@ -336,9 +336,10 @@ async function onMessage(m){
 if((Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))&&u.state!=="support")return begin(u);
 if(m.photo?.length&&u.state==="photo"){
  const file=m.photo[m.photo.length-1].file_id;
- const list=Array.isArray(u.photos)?u.photos:[];
- const photos=[...new Set([...list,file])].slice(0,5);
- await change(id,{photos,photo:photos[0],state:photos.length>=5?"":"photo"});
+ // Append using one database statement; simultaneous Telegram album parts cannot lose photo IDs.
+ const saved=await sql("UPDATE mm_users SET photos=CASE WHEN photos @> jsonb_build_array($2::text) THEN photos ELSE photos || jsonb_build_array($2::text) END,photo=COALESCE(photo,$2) WHERE id=$1 AND (jsonb_array_length(photos)<5 OR photos @> jsonb_build_array($2::text)) RETURNING photos",id,file);
+ const photos=saved[0]?.photos||[];
+ if(photos.length>=5)await change(id,{state:""});
  if(photos.length===1)await send(id,"Первое фото сохранено — оно будет главным. Можно добавить до пяти фотографий.",buttons([[["✅ Готово","photo_done"]]]));
  if(photos.length>=5){await send(id,"Все пять фотографий сохранены ✅");const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await backfill(fresh);await profileBackfill(fresh);return begin(fresh)}
  return;
