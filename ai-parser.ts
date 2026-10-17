@@ -22,7 +22,8 @@ export function validateModelJob(raw,contact,settings={}){
  const title=toText(raw.title,40)||"Заявка на съёмку";
  return {
    "название заявки":title,"кого ищу":[...new Set(roles)].join(", "),
-   "тип работы":toText(raw.work,120)||toText(settings.topic,120)||"съёмка",
+   "тип работы":toText(raw.work,120)||"съёмка",
+   "метка темы":toText(settings.topic,120),
    "город":city,
    "требования":toText(raw.requirements,350)||"не указано",
    "формат и оплата":toText(raw.payment,150)||"не указано",
