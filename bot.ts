@@ -9,7 +9,7 @@ const db=new SQL(Bun.env.DATABASE_URL||"postgres://unconfigured");
 const token=Bun.env.BOT_TOKEN||"", secret=Bun.env.WEBHOOK_SECRET||"";
 const admin=(Bun.env.ADMIN_IDS||"").split(",");
 const roles=ROLES;
-const menu={inline_keyboard:[[{text:"👤 Моя анкета",callback_data:"profile"},{text:"🎯 Фильтры",callback_data:"filters"}],[{text:"📢 Найти заявки",callback_data:"jobs"},{text:"➕ Разместить",callback_data:"new"}],[{text:"📌 Мои заявки",callback_data:"mine"},{text:"⏸️ Поиск вкл/выкл",callback_data:"pause"}],[{text:"📚 Статьи",callback_data:"articles"}],[{text:"🎁 Пригласить друга",callback_data:"invitefriend"},{text:"❓ Поддержка",callback_data:"support"}]]};
+const menu={inline_keyboard:[[{text:"👤 Моя анкета",callback_data:"profile"},{text:"🎯 Фильтры",callback_data:"filters"}],[{text:"📢 Найти заявки",callback_data:"jobs"},{text:"➕ Разместить",callback_data:"new"}],[{text:"📌 Мои заявки",callback_data:"mine"},{text:"⏸️ Поиск вкл/выкл",callback_data:"pause"}],[{text:"🔎 Анкеты",callback_data:"browse:0"},{text:"📚 Статьи",callback_data:"articles"}],[{text:"🎁 Пригласить друга",callback_data:"invitefriend"},{text:"❓ Поддержка",callback_data:"support"}]]};
 const esc=s=>String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
 async function sql(q,...v){return db.unsafe(q,v)}
 async function setup(){
@@ -165,6 +165,38 @@ async function matchingJobs(u,limit=50){
  for(const job of jobs){if(await matches(u,job))matched.push(job);if(matched.length>=limit)break}
  return matched;
 }
+
+async function browseProfiles(u,offset=0){
+ if(!allConsentsCurrent(u.consent,await currentDocumentHashes()))return begin(u);
+ const requested=u.filters?.profileRole||"";
+ const city=(u.filters?.profileCity||u.filters?.city||"").trim().toLowerCase();
+ const profiles=await sql("SELECT * FROM mm_users WHERE id<>$1 AND blocked=FALSE AND suspended=FALSE AND active=TRUE AND photo IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 300",u.id);
+ const publicProfiles=profiles.filter(p=>{
+  if(!allConsentsCurrent(p.consent,cachedDocHashes)||!eligibleProfile(p.profile,p.photo))return false;
+  if(requested&&!get(p.profile,"кто вы").split(",").map(x=>x.trim().toLowerCase()).includes(requested))return false;
+  if(city&&!city.split(",").some(c=>get(p.profile,"город").toLowerCase().includes(c.trim())))return false;
+  return true;
+ });
+ const page=publicProfiles.slice(offset,offset+3);
+ if(!page.length)await send(u.id,offset?"Других анкет по выбранным фильтрам пока нет.":"Не нашлось подходящих анкет. Попробуйте изменить город или профессию.");
+ else for(const p of page)await profile(u.id,p,"Анкета в каталоге");
+ const next=offset+page.length<publicProfiles.length;
+ const nav=[];
+ if(offset>0)nav.push(["◀️ Назад","browse:"+Math.max(0,offset-3)]);
+ if(next)nav.push(["Дальше ▶️","browse:"+(offset+3)]);
+ const rows=[];
+ if(nav.length)rows.push(nav);
+ rows.push([["⚙️ Профессия","browse_roles"],["🏙 Город","browse_city"]]);
+ rows.push([["🏠 В меню","home"]]);
+ await send(u.id,"🔎 <b>Каталог анкет</b> • показаны "+page.length+" из "+publicProfiles.length+
+  "\\nГород: "+esc(city||"все")+" · Профессия: "+esc(requested||"все"),buttons(rows));
+}
+async function chooseBrowseRole(u){
+ const rows=[[["Все направления","browse_role:all"]]];
+ for(let i=0;i<ROLES.length;i+=2)rows.push(ROLES.slice(i,i+2).map((role,n)=>[(u.filters?.profileRole===role?"✅ ":"")+role,"browse_role:"+(i+n)]));
+ return send(u.id,"Выберите нужную профессию:",buttons(rows));
+}
+
 async function showFilterMenu(u){
  const matched=await matchingJobs(u,200);
  const f=u.filters||{};
@@ -197,7 +229,7 @@ async function onMessage(m){if(m.chat?.type&&m.chat.type!=="private"){await onSo
  }
  if(/^profile_\d+$/.test(payload)&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&u.phone){
   const target=(await sql("SELECT * FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE AND photo IS NOT NULL",Number(payload.slice(8))))[0];
-  if(target){await profile(id,target);return begin(u)}
+  if(target&&eligibleProfile(target.profile,target.photo)&&allConsentsCurrent(target.consent,await currentDocumentHashes())){await profile(id,target);return begin(u)}
   await send(id,"Эта анкета сейчас не участвует в поиске.");return begin(u);
  }
  return begin(u);
@@ -215,7 +247,12 @@ if(m.photo?.length&&u.state==="photo"){
 if(u.state==="support"){if(m.photo?.length)return saveReport(u,m.caption||"Фото-доказательство",m.photo.at(-1).file_id);return saveReport(u,t)}
 if(u.state==="profile"){let p={...(u.profile||{}),...parse(t)},errors=validProfile(p);if(errors.length)return send(id,"Уточните:\n• "+esc(errors.join("\n• "))+"\nОтправьте исправленный шаблон.");await change(id,{profile:p,state:"profile_confirm"});return send(id,"<b>Проверьте анкету:</b>\n"+esc(t),buttons([[["✅ Сохранить","profile_save"],["✏️ Исправить","edit_profile"]]]))}
 if(u.state==="job"){let p=parse(t),errors=validJob(p);if(errors.length)return send(id,"Исправьте заявку:\n• "+esc(errors.join("\n• ")));await change(id,{filters:{...(u.filters||{}),draft:p},state:"job_confirm"});return send(id,"Предпросмотр:\n"+esc(t),buttons([[["✅ Опубликовать","publish"],["✏️ Исправить","new"]]]))}
-if(u.state==="filter"){let p=parse(t);await change(id,{filters:{city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});await send(id,"Фильтры сохранены. Подбираю актуальные заявки.",menu);const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await backfill(fresh);return showFilterMenu(fresh)}
+if(u.state==="browse_city"){
+  const city=t.trim().toLowerCase()==="все"?"":t.trim().slice(0,80);
+  const filters={...(u.filters||{}),profileCity:city};
+  await change(id,{filters,state:""});return browseProfiles({...u,filters},0);
+ }
+ if(u.state==="filter"){let p=parse(t);await change(id,{filters:{city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});await send(id,"Фильтры сохранены. Подбираю актуальные заявки.",menu);const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await backfill(fresh);return showFilterMenu(fresh)}
 return begin(u)}
 async function onCallback(c){await call("answerCallbackQuery",{callback_query_id:c.id});let u=await who(c.from),id=u.id,a=c.data;if(a.startsWith("consent:")){
  if(!(await legalReady(sql)))return send(id,"Сначала должны быть опубликованы документы сервиса.");
@@ -249,7 +286,18 @@ if(a==="template_model"||a==="template_client"){await change(id,{state:"profile"
  for(const j of js)await card(id,j);
  if(js.length<=3)await send(id,"По вашим настройкам сейчас всего "+js.length+" подходящих заявок.");
  return;
-}if(a==="mine"){let js=await sql("SELECT * FROM mm_jobs WHERE owner=$1 ORDER BY id DESC LIMIT 20",id);if(!js.length)return send(id,"Ваших заявок пока нет.");for(let j of js)await send(id,"№"+j.id+" — "+esc(get(j.body,"название заявки"))+" ("+(j.paused?"поиск остановлен":esc(j.status))+")",buttons([[[j.paused?"▶️ Восстановить":"⏸️ Остановить","jobpause:"+j.id],["Закрыть","close:"+j.id]]]));return}if(a.startsWith("jobpause:")){const rows=await sql("UPDATE mm_jobs SET paused=NOT paused WHERE id=$1 AND owner=$2 AND status='active' RETURNING paused",Number(a.slice(9)),id);return send(id,rows.length?(rows[0].paused?"Поиск анкет по этой заявке остановлен.":"Поиск анкет по этой заявке возобновлён."):"Заявка недоступна.")}if(a.startsWith("close:")){await sql("UPDATE mm_jobs SET status='closed' WHERE id=$1 AND owner=$2",+a.slice(6),id);return send(id,"Заявка закрыта.")}if(a==="filters")return showFilterMenu(u);
+}if(a==="mine"){let js=await sql("SELECT * FROM mm_jobs WHERE owner=$1 ORDER BY id DESC LIMIT 20",id);if(!js.length)return send(id,"Ваших заявок пока нет.");for(let j of js)await send(id,"№"+j.id+" — "+esc(get(j.body,"название заявки"))+" ("+(j.paused?"поиск остановлен":esc(j.status))+")",buttons([[[j.paused?"▶️ Восстановить":"⏸️ Остановить","jobpause:"+j.id],["Закрыть","close:"+j.id]]]));return}if(a.startsWith("jobpause:")){const rows=await sql("UPDATE mm_jobs SET paused=NOT paused WHERE id=$1 AND owner=$2 AND status='active' RETURNING paused",Number(a.slice(9)),id);return send(id,rows.length?(rows[0].paused?"Поиск анкет по этой заявке остановлен.":"Поиск анкет по этой заявке возобновлён."):"Заявка недоступна.")}if(a.startsWith("close:")){await sql("UPDATE mm_jobs SET status='closed' WHERE id=$1 AND owner=$2",+a.slice(6),id);return send(id,"Заявка закрыта.")}if(a==="home")return begin(u);
+ if(a.startsWith("browse_role:")){
+  const key=a.slice("browse_role:".length);
+  const role=key==="all"?"":ROLES[Number(key)];
+  if(role===undefined)return;
+  const filters={...(u.filters||{}),profileRole:role};
+  await change(id,{filters});return browseProfiles({...u,filters},0);
+ }
+ if(a==="browse_roles")return chooseBrowseRole(u);
+ if(a==="browse_city"){await change(id,{state:"browse_city"});return send(id,"Напишите город для каталога, например «Москва». Для сброса отправьте «все».");}
+ if(a.startsWith("browse:"))return browseProfiles(u,Math.max(0,Math.min(297,Number(a.slice(7))||0)));
+ if(a==="filters")return showFilterMenu(u);
 if(a==="editfilters"){await change(id,{state:"filter"});return send(id,"Отправьте фильтры отдельным сообщением:\n<code>Город: Москва\nТип работы: реклама\nФормат: коммерция</code>\nЕсли строку оставить пустой, ограничение по ней отключится.")}if(a==="pause"){await change(id,{active:!u.active});if(!u.active)await backfill({...u,active:true});return send(id,u.active?"Поиск приостановлен. Анкета скрыта.":"Поиск возобновлён.")}if(a==="reply:"+a.slice(6)&&a.startsWith("reply:")){let j=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND expires_at>NOW()",+a.slice(6)))[0];if(!j||j.paused)return send(id,"Поиск по заявке остановлен.");if(!u.photo)return send(id,"Сначала добавьте фото в анкету.");let n=await sql("SELECT count(*)::int AS n FROM mm_responses WHERE user_id=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].n)return send(id,"Бесплатный лимит — 1 отклик с понедельника по воскресенье.");let saved=await sql("INSERT INTO mm_responses(job_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING id",j.id,id);if(!saved.length)return send(id,"Отклик уже учтён.");const owner=j.owner===0?null:(await sql("SELECT * FROM mm_users WHERE id=$1",j.owner))[0];if(j.contact){const contact=String(j.contact).replace(/^@/,"");if(/^\w{5,32}$/.test(contact)){const draft="Здравствуйте! Ваша заявка «"+get(j.body,"название заявки")+"» пришла мне в боте Мир моделей. С радостью обсужу детали.";await send(id,"Откройте диалог с автором:",{inline_keyboard:[[{text:"✉️ Написать автору",url:"https://t.me/"+contact+"?text="+encodeURIComponent(draft)}]]});return}await send(id,"Контакт автора: "+esc(j.contact));return}if(owner?.username){const draft="Здравствуйте! Откликаюсь на заявку «"+get(j.body,"название заявки")+"». С радостью обсужу детали.";await send(id,"Для отправки откройте диалог:",{inline_keyboard:[[{text:"✉️ Написать автору",url:"https://t.me/"+owner.username+"?text="+encodeURIComponent(draft)}]]})}else await send(id,"Отклик учтён, но у автора нет доступного @ника.");if(owner){await send(owner.id,"Отклик на заявку №"+j.id);await profile(owner.id,u,"Анкета откликнувшегося");await send(owner.id,"Выберите действие:",buttons([[["✅ Принять отклик","acceptresponse:"+saved[0].id],["❌ Отклонить","declineresponse:"+saved[0].id]]]))}return}if(a.startsWith("invite:")){
  const target=Number(a.slice(7));
  if(target===id)return send(id,"Нельзя пригласить самого себя.");
