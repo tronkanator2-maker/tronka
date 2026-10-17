@@ -24,7 +24,8 @@ export async function feedbackTick(sql,send){
  const rows=await sql("SELECT * FROM mm_feedback_checks WHERE finished_at IS NULL AND due_at<=NOW() AND (sent_at IS NULL OR (reminded_at IS NULL AND sent_at<NOW()-INTERVAL '3 days')) ORDER BY due_at LIMIT 50");
  for(const c of rows){
   try {
-   await send(c.actor,c.sent_at?"Напоминание: расскажите, состоялась ли съёмка.":"Как прошло сотрудничество? Съёмка состоялась?",options([[["✅ Состоялась","feedback:yes:"+c.id],["❌ Не состоялась","feedback:no:"+c.id]]]));
+   const notice=await send(c.actor,c.sent_at?"Напоминание: расскажите, состоялась ли съёмка.":"Как прошло сотрудничество? Съёмка состоялась?",options([[["✅ Состоялась","feedback:yes:"+c.id],["❌ Не состоялась","feedback:no:"+c.id]]]));
+   if(!notice?.ok)continue;
    if(c.sent_at)await sql("UPDATE mm_feedback_checks SET reminded_at=NOW() WHERE id=$1 AND reminded_at IS NULL",c.id);
    else await sql("UPDATE mm_feedback_checks SET sent_at=NOW() WHERE id=$1 AND sent_at IS NULL",c.id);
   }catch(e){console.error("feedback notification",String(e))}
