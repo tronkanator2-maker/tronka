@@ -1,0 +1,1 @@
+{"name":"world-models-mtproto-collector","private":true,"type":"module","scripts":{"start":"bun run collector.ts"},"dependencies":{"teleproto":"1.230.1"}}
