@@ -1,4 +1,4 @@
-import {publishDocument} from "./documents.ts";
+import {publishDocument,legalReady,latestDocuments} from "./documents.ts";
 import {inferCity} from "./engine.ts";
 // Minimal secured operational dashboard. Disabled until both ADMIN_PASSWORD and ADMIN_TOTP_SECRET are configured.
 // Session tokens are only kept in memory; no user data is exposed to unauthenticated requests.
@@ -113,14 +113,15 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
  }
  if(url.pathname==="/admin/data"&&req.method==="GET"){
   const [[stats],sources,candidates,pending,reports,users]=await Promise.all([
-    sql("SELECT (SELECT count(*) FROM mm_users)::int users,(SELECT count(*) FROM mm_jobs)::int jobs,(SELECT count(*) FROM mm_jobs WHERE source_id IS NOT NULL)::int imported,(SELECT count(*) FROM mm_responses)::int responses,(SELECT count(*) FROM mm_sources WHERE active)::int active_sources,(SELECT count(*) FROM mm_jobs WHERE status='pending')::int pending"),
+    sql("SELECT (SELECT COUNT(*) FROM mm_users)::int users,(SELECT COUNT(*) FROM mm_jobs)::int jobs,(SELECT COUNT(*) FROM mm_jobs WHERE source_id IS NOT NULL)::int imported,(SELECT COUNT(*) FROM mm_responses)::int responses,(SELECT COUNT(*) FROM mm_sources WHERE active)::int active_sources,(SELECT COUNT(*) FROM mm_jobs WHERE status='pending')::int pending,(SELECT COUNT(*) FROM mm_response_outbox WHERE completed_at IS NULL)::int queued_responses,(SELECT COUNT(*) FROM mm_response_outbox WHERE completed_at IS NULL AND attempts>=3)::int struggling_responses,(SELECT COUNT(*) FROM mm_fanout_queue WHERE pending=TRUE)::int queued_job_broadcasts,(SELECT COUNT(*) FROM mm_collector_inbox WHERE processed_at IS NULL)::int unprocessed_source_posts,(SELECT COUNT(*) FROM mm_reports_v2 WHERE status='new')::int new_support_tickets,(SELECT MAX(created_at) FROM mm_updates) AS latest_webhook_at"),
     sql("SELECT id,title,city,topic,active,mode,last_seen_at,disabled_reason,created_at FROM mm_sources ORDER BY created_at DESC LIMIT 100"),
     sql("SELECT id,username,title,reason,unique30,total30,checked_at FROM mm_candidate_sources WHERE status='needs_review' ORDER BY checked_at DESC LIMIT 50"),
     sql("SELECT id,body,source_id,created_at FROM mm_jobs WHERE status='pending' ORDER BY id LIMIT 30"),
     sql("SELECT id,reporter,target_user,target_job,kind,status,body,created_at,updated_at FROM mm_reports_v2 ORDER BY id DESC LIMIT 40"),
     sql("SELECT id,username,first_name,active,blocked,suspended,created_at FROM mm_users ORDER BY created_at DESC LIMIT 40")
   ]);
-  return json({stats,sources,candidates,pending,reports,users});
+  const published=await latestDocuments(sql);
+  return json({stats:{...stats,registration_enabled:Bun.env.REGISTRATION_ENABLED==="true",required_documents_ready:await legalReady(sql),published_documents:published.length,collector_credentials_available:!!Bun.env.TG_STRING_SESSION},sources,candidates,pending,reports,users});
  }
  if(url.pathname==="/admin/action"&&req.method==="POST"){
   let data;try{data=await req.json()}catch{return json({error:"Некорректный запрос"},400)}
