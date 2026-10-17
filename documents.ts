@@ -67,3 +67,14 @@ export async function publicDocumentRoute(req,sql){
  const d=docs[0];
  return new Response(wrap(d.title,"<p>Версия "+d.version+" · Контрольная сумма: "+escapeDocument(d.sha256)+"</p><pre>"+escapeDocument(d.body)+"</pre><a href='/documents'>Все документы</a>"),{headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"}});
 }
+
+
+/** Stored separately for each consent: changing the underlying policy requires fresh consent. */
+export function consentIsCurrent(consents, documentHashes, consentIndex){
+ const i=String(consentIndex), key=i+"_hashes";
+ if(!consents?.[i] || !consents?.[key] || !documentHashes)return false;
+ return requiredDocumentSlugs.every(slug=>typeof documentHashes[slug]==="string" && documentHashes[slug]===consents[key][slug]);
+}
+export function allConsentsCurrent(consents, documentHashes){
+ return [0,1,2].every(n=>consentIsCurrent(consents,documentHashes,n));
+}
