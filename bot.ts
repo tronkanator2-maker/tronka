@@ -80,7 +80,7 @@ async function currentDocumentHashes(){
 function consentBoard(u,hashes){let c=u.consent||{};
  const ok=i=>consentIsCurrent(c,hashes,i);
  return buttons([...consentNames.map((x,i)=>[[(ok(i)?"✅ ":"☐ ")+x,"consent:"+i]]),[["📄 Документы","docs"]],...([0,1,2].every(ok)?[[["Продолжить","go"]]]:[])])}
-async function begin(u){if(u.blocked)return send(u.id,"Аккаунт ограничен. /support");if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql)))return send(u.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации юридических документов и проверки интеграций.");const hashes=await currentDocumentHashes();
+async function begin(u){if(u.blocked)return send(u.id,"Аккаунт ограничен. /support");if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql)))return send(u.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации юридических документов и проверки интеграций. Пока можно посмотреть демонстрацию без регистрации.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));const hashes=await currentDocumentHashes();
  if(!allConsentsCurrent(u.consent,hashes))return send(u.id,"<b>Добро пожаловать в Мир моделей!</b>\nОзнакомьтесь с действующими документами и дайте три отдельных согласия.",consentBoard(u,hashes));if(!u.phone)return send(u.id,"Подтвердите ваш собственный номер через кнопку Telegram. Номер не будет опубликован.",{keyboard:[[{text:"📱 Поделиться номером",request_contact:true}]],resize_keyboard:true,one_time_keyboard:true});if(!u.username)return send(u.id,"Установите @имя пользователя в настройках Telegram, затем отправьте /start.");return send(u.id,"<b>✨ Мир моделей</b>\nВыберите раздел.",menu)}
 const parse=parseFields;
 const get=field;
@@ -277,7 +277,19 @@ async function showFilterMenu(u){
 }
 async function backfill(u){const jobs=await sql("SELECT * FROM mm_jobs WHERE status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' ORDER BY created_at DESC LIMIT 100");for(const j of jobs)try{await deliverTo(u,j)}catch(e){console.error("backfill",String(e))}}
 
-async function onMessage(m){if(m.chat?.type&&m.chat.type!=="private"){await onSourcePost(m);return}let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
+
+function demoMenu(){
+ return buttons([[["👤 Пример анкеты","demo:profile"],["📢 Пример заявки","demo:job"]],[["🎯 Фильтры","demo:filters"],["🔎 Поиск анкет","demo:catalog"]],[["🏠 В начало","demo:home"]]]);
+}
+async function demoScreen(id,screen="home"){
+ if(screen==="profile")return send(id,"🎬 <b>ДЕМО · Анкета</b>\\n\\nИмя: Анна\\nНаправление: модель\\nВозраст: 24 года\\nГород: Москва\\nРост: 172 см\\nФормат: коммерция, ТФП\\nПрайс: 3 000 ₽/час\\nПортфолио: прикрепляется пользователем\\n\\nКонтакты скрыты до взаимодействия.",demoMenu());
+ if(screen==="job")return send(id,"🎬 <b>ДЕМО · Заявка</b>\\n\\nСъёмка каталога одежды\\nКого ищу: модель\\nГород: Москва\\nОплата: 5 000 ₽ за смену\\nДата: по согласованию\\nОписание: коммерческая съёмка, 4 часа.\\n\\nКнопки отклика заработают после открытия регистрации.",demoMenu());
+ if(screen==="filters")return send(id,"🎬 <b>ДЕМО · Фильтры</b>\\n\\nГорода: Москва, Санкт-Петербург\\nТип работы: реклама, кино\\nФормат: коммерция / ТФП\\nЧьи анкеты получать: фотографы, визажисты\\n18+: выключено по умолчанию.\\n\\nЭто демонстрационные данные, реальные фильтры не меняются.",demoMenu());
+ if(screen==="catalog")return send(id,"🎬 <b>ДЕМО · Каталог</b>\\n\\nАнкеты доступны по городу и профессии. Ключевое фото и обязательные поля проверяются до публикации. Контакты открываются только после приглашения.\\n\\nСейчас реальные данные пользователей не показываются.",demoMenu());
+ return send(id,"🎬 <b>Демо «Мир моделей»</b>\\nМожно посмотреть основные экраны без регистрации. Данные и фотографии вымышленные, реальные заявки не отправляются.",demoMenu());
+}
+
+async function onMessage(m){if(m.chat?.type&&m.chat.type!=="private"){await onSourcePost(m);return}let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
  if(t==="/cancel"){await change(id,{state:""});return send(id,"Текущее действие отменено. Вернуться в меню: /start");}
  if(t==="/mydata"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Данных нет.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Не получилось отправить архив. Попробуйте позже.");return;}
  if(t==="/deleteaccount"){await change(id,{state:"delete_confirm"});return send(id,"<b>Удалить аккаунт и данные?</b>\nЭто удалит анкету, фотографии из нашей базы, ваши заявки, историю откликов, отзывов, приглашений, согласий и обращений. Сообщения, ранее отправленные другим пользователям Telegram, стереть удалённо нельзя.\n\nПодтвердите удаление отдельной кнопкой.",buttons([[["❌ Удалить мои данные","deleteaccount:confirm"]],[["Отмена","deleteaccount:cancel"]]]));}if(t==="/subscription")return send(id,hasPaidAccess(u)?"⭐ Подписка или пробный период активны до "+esc(new Date(u.access_until&&new Date(u.access_until)>new Date(u.trial_until||0)?u.access_until:u.trial_until).toLocaleDateString("ru-RU")):"Бесплатный доступ: один отклик, одна заявка и одно приглашение в календарную неделю.");if(t.startsWith("/start")){
@@ -321,7 +333,7 @@ if(u.state==="browse_city"){
  }
  if(u.state==="filter"){let p=parse(t);await change(id,{filters:{...(u.filters||{}),city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});await send(id,"Фильтры сохранены. Подбираю актуальные заявки.",menu);const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await backfill(fresh);return showFilterMenu(fresh)}
 return begin(u)}
-async function onCallback(c){await call("answerCallbackQuery",{callback_query_id:c.id});let u=await who(c.from),id=u.id,a=c.data;if(a==="privacy")return send(id,"🔐 <b>Данные и приватность</b>\nЭкспорт показывает сведения, сохранённые сервисом. Удаление аккаунта безвозвратное; ранее отправленные Telegram-сообщения других людей останутся.",buttons([[["📦 Экспорт данных","privacy:export"]],[["🗑 Удалить аккаунт","privacy:delete"]],[["◀️ В меню","home"]]]));
+async function onCallback(c){await call("answerCallbackQuery",{callback_query_id:c.id});let u=await who(c.from),id=u.id,a=c.data;if(a?.startsWith("demo:"))return demoScreen(id,a.slice(5));if(a==="privacy")return send(id,"🔐 <b>Данные и приватность</b>\nЭкспорт показывает сведения, сохранённые сервисом. Удаление аккаунта безвозвратное; ранее отправленные Telegram-сообщения других людей останутся.",buttons([[["📦 Экспорт данных","privacy:export"]],[["🗑 Удалить аккаунт","privacy:delete"]],[["◀️ В меню","home"]]]));
  if(a==="privacy:export"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Сведения ещё не сохранены.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Ошибка отправки файла.");return;}
  if(a==="privacy:delete"){await change(id,{state:"delete_confirm"});return send(id,"<b>Подтвердите окончательное удаление</b>\nАнкета, фото и объявления будут удалены из базы. Уже отправленные сообщения в чужих Telegram-чатах сохранятся.",buttons([[["Да, удалить всё","deleteaccount:confirm"]],[["Отменить","deleteaccount:cancel"]]]));}
  if(a==="deleteaccount:cancel"){await change(id,{state:""});return send(id,"Удаление отменено.",menu);}
