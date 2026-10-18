@@ -98,6 +98,12 @@ const buttons=rows=>({inline_keyboard:rows.map(row=>row.map(([text,callback_data
 async function change(id,fields){let sets=[],vals=[];for(const [k,v] of Object.entries(fields)){const json=v!==null&&typeof v==="object";vals.push(json?JSON.stringify(v):v);sets.push(k+"=$"+vals.length+(json?"::jsonb":""));}vals.push(id);await sql("UPDATE mm_users SET "+sets.join(",")+" WHERE id=$"+vals.length,...vals)}
 async function who(f){await sql("INSERT INTO mm_users(id,username,first_name) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name",f.id,f.username||null,f.first_name||"");return(await sql("SELECT * FROM mm_users WHERE id=$1",f.id))[0]}
 const consentNames=["Оферта и правила сервиса","Обработка персональных данных","Показ анкеты другим"];
+const testConsentComplete=c=>[0,1,2].every(i=>c?.["test_check_"+i]===true);
+const testConsentBoard=u=>{
+ const c=u?.consent||{};
+ return buttons([...["Условия участия","Обработка введённых данных","Публикация анкеты"].map((label,i)=>[[(c["test_check_"+i]===true?"✅ ":"☐ ")+label,"test:consent:"+i]]),[["📖 Описание пунктов","test:docs"]],...(testConsentComplete(c)?[[["✨ Продолжить","test:agree"]]]:[])]);
+};
+const testConsentDetails="Перед началом:\n\n1. Участие добровольное, с 18 лет.\n2. Сервис сохраняет введённые данные для работы анкет и заявок. Не указывайте конфиденциальные сведения и реальные документы.\n3. После публикации анкету смогут увидеть другие участники.\n\nОтозвать разрешение и удалить сведения можно в разделе «Личные данные». Эти пояснения не заменяют утверждённые юридические документы.";
 let cachedDocHashes=null,cachedDocHashesUntil=0;
 async function currentDocumentHashes(){
  if(cachedDocHashes && Date.now()<cachedDocHashesUntil)return cachedDocHashes;
@@ -114,9 +120,9 @@ const welcomeControls=(intent="home")=>{
 };
 async function begin(u){
  if(u.blocked||u.suspended)return send(u.id,"Аккаунт ограничен. Напишите /support или используйте /mydata.");
- if(!testReady()||!(await legalReady(sql)))return send(u.id,"«Мир моделей» готовится к запуску. Пока доступно демо.",buttons([[["🎬 Демо","demo:home"]],[["📄 Документы","docs"]]]));
+ if(!testReady()||(!testMode()&&!(await legalReady(sql))))return send(u.id,"«Мир моделей» готовится к запуску. Пока доступно демо.",buttons([[["🎬 Демо","demo:home"]],[["📄 Документы","docs"]]]));
  if(testMode()){
-  if(!canUseTestFeatures(Bun.env,u.consent))return send(u.id,testWarning,welcomeControls());
+  if(!canUseTestFeatures(Bun.env,u.consent))return send(u.id,"Перед началом отметьте три отдельных пункта.",testConsentBoard(u));
   const resume=u.state==="wizard"?[[{text:"▶️ Продолжить анкету",callback_data:"wizard:resume"},{text:"❌ Отменить",callback_data:"wizard:cancel"}]]:u.state==="profile_confirm"?[[{text:"✅ Сохранить черновик",callback_data:"profile_save"},{text:"✏️ Исправить",callback_data:"edit_profile"}]]:u.filters?.profileDraft?[[{text:"📝 Вернуться к черновику",callback_data:"edit_profile"},{text:"❌ Отменить",callback_data:"wizard:cancel"}]]:u.state==="job_wizard"?[[{text:"▶️ Продолжить заявку",callback_data:"jobwizard:resume"},{text:"❌ Отменить",callback_data:"jobwizard:cancel"}]]:u.state==="job_confirm"?[[{text:"✅ Опубликовать заявку",callback_data:"publish"},{text:"✏️ Исправить",callback_data:"job_template"}]]:[];
   return send(u.id,testMenuText+(resume.length?"\n\n📝 У вас есть незавершённая анкета.":""),{inline_keyboard:[...resume,...menu.inline_keyboard]});
  }
@@ -546,14 +552,14 @@ async function onMessage(m){
  if(text==="/demo")return demoScreen(m.from.id);
   if(text==="/help")return send(m.from.id,getGuide("getting-started").text,buttons([[["📚 Другие материалы","articles"],["✨ Начать","onboard:home"]]]));
  if(text==="/id")return send(m.from.id,"Telegram ID: <code>"+m.from.id+"</code>");
- if(text.startsWith("/start")&&(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql)))){
+ if(text.startsWith("/start")&&(Bun.env.REGISTRATION_ENABLED!=="true"||(!testMode()&&!(await legalReady(sql))))){
   return send(m.from.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации документов и проверки интеграций. Пока можно посмотреть демонстрацию.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));
  }
  if(testMode()&&testReady()){
   const existing=(await sql("SELECT consent FROM mm_users WHERE id=$1",m.from.id))[0];
   const personalControl=!!existing&&/^\/(?:mydata|deleteaccount|support|cancel|help)(?:\s|$)/.test(text);
   if(!canUseTestFeatures(Bun.env,existing?.consent)&&!personalControl)
-   return send(m.from.id,testWarning,welcomeControls(parseStartTarget(text)?.callback||"home"));
+   return send(m.from.id,"✨ <b>Добро пожаловать в «Мир моделей»!</b>\nПрочитайте три пункта и отметьте каждый перед началом.",testConsentBoard(existing));
  }
  let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
  if(t==="/cancel"){const f=clearJobWizard(discardProfileDraft(u.filters));delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftToken;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
@@ -664,20 +670,26 @@ async function onCallback(c){
 
  const requestedAction=String(c.data||"");
  const onboardingClick=requestedAction==="test:agree"||requestedAction.startsWith("onboard:");
- if(testMode()&&!onboardingClick&&!["test:revoke","privacy","privacy:export","privacy:delete","deleteaccount:cancel","deleteaccount:confirm"].includes(requestedAction)){
-  const existing=(await sql("SELECT consent FROM mm_users WHERE id=$1",c.from.id))[0];
-  if(!canUseTestFeatures(Bun.env,existing?.consent))
-   return send(c.from.id,testWarning,welcomeControls(requestedAction));
- }
  let u=await who(c.from),id=u.id,a=requestedAction;
+ if(a.startsWith("test:consent:")){
+  if(!testMode()||!testReady())return send(id,"Регистрация недоступна.");
+  const n=Number(a.slice("test:consent:".length));if(!Number.isInteger(n)||n<0||n>2)return;
+  const consent={...(u.consent||{})};consent["test_check_"+n]=consent["test_check_"+n]!==true;
+  if(!testConsentComplete(consent))consent.test_access=false;
+  await change(id,{consent});
+  return call("editMessageReplyMarkup",{chat_id:id,message_id:c.message.message_id,reply_markup:testConsentBoard({...u,consent})});
+ }
+ if(a==="test:docs")return send(id,testConsentDetails,testConsentBoard(u));
  if(onboardingClick){
   if(!testMode()||!testReady())return send(id,"Регистрация пока недоступна.");
+  if(!testConsentComplete(u.consent))return send(id,"Отметьте все три пункта, чтобы продолжить.",testConsentBoard(u));
   const consent={...(u.consent||{}),test_access:true,test_at:new Date().toISOString()};
-  await change(id,{consent,active:true});
-  u={...u,consent,active:true};
+  await change(id,{consent,active:true});u={...u,consent,active:true};
   a=requestedAction.startsWith("onboard:")?requestedAction.slice(8):"home";
   if(a==="home")return begin(u);
  }
+ if(testMode()&&!canUseTestFeatures(Bun.env,u.consent)&&!["test:revoke","privacy","privacy:export","privacy:delete","deleteaccount:cancel","deleteaccount:confirm"].includes(a))
+  return send(id,"Перед использованием сервиса подтвердите условия.",testConsentBoard(u));
  // A shared deep link must open its intended target after first-time registration.
  const deepTarget=parseOnboardTarget(a);
  if(deepTarget){
