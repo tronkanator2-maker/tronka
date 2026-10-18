@@ -5,7 +5,7 @@ import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
 import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
 import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer,toggleProfileRole,canFinishWizardNow} from "./profile-wizard.ts";
-import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,testWarning,testMenuText} from "./test-mode.ts";
+import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,isPreConsentCallback,testWarning,testMenuText} from "./test-mode.ts";
 import {redactContacts,publicProfileEntries,publicProfileAllowed} from "./visibility.ts";
 import {adminApp} from "./admin.ts";
 import {setupSourceHealth,allowanceForModel,reviewSourceHealth} from "./source-health.ts";
@@ -688,7 +688,7 @@ async function onCallback(c){
   a=requestedAction.startsWith("onboard:")?requestedAction.slice(8):"home";
   if(a==="home")return begin(u);
  }
- if(testMode()&&!canUseTestFeatures(Bun.env,u.consent)&&!["test:revoke","privacy","privacy:export","privacy:delete","deleteaccount:cancel","deleteaccount:confirm"].includes(a))
+ if(testMode()&&!canUseTestFeatures(Bun.env,u.consent)&&!isPreConsentCallback(a))
   return send(id,"Перед использованием сервиса подтвердите условия.",testConsentBoard(u));
  // A shared deep link must open its intended target after first-time registration.
  const deepTarget=parseOnboardTarget(a);
