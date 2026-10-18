@@ -1,4 +1,5 @@
 import {SQL} from "bun";
+import {decodeDbRows} from "./db-json.ts";
 import {parseStartTarget,parseOnboardTarget,parseReferralStart,parseReferralOnboard} from "./deep-links.ts";
 import {leavingToHome} from "./navigation-state.ts";
 import {prepareAcceptedResponseOutbox,acceptResponseForOwner,deliverAcceptedResponses} from "./response-acceptance.ts";
@@ -44,7 +45,7 @@ const menu={inline_keyboard:[
  [{text:"⚙️ Ещё",callback_data:"more"}]
 ]};
 const esc=s=>String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
-async function sql(q,...v){return db.unsafe(q,v)}
+async function sql(q,...v){return decodeDbRows(await db.unsafe(q,v),q)}
 async function setup(){
 await sql("CREATE TABLE IF NOT EXISTS mm_users(id BIGINT PRIMARY KEY, username TEXT, first_name TEXT, phone TEXT, consent JSONB DEFAULT '{}', state TEXT DEFAULT '', profile JSONB DEFAULT '{}', filters JSONB DEFAULT '{}', photo TEXT, active BOOLEAN DEFAULT TRUE, blocked BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("CREATE TABLE IF NOT EXISTS mm_jobs(id BIGSERIAL PRIMARY KEY,owner BIGINT NOT NULL,body JSONB NOT NULL,status TEXT DEFAULT 'active',created_at TIMESTAMPTZ DEFAULT NOW(),expires_at TIMESTAMPTZ DEFAULT NOW()+INTERVAL '14 days')");
@@ -56,6 +57,7 @@ await sql("CREATE TABLE IF NOT EXISTS mm_response_outbox(response_id BIGINT PRIM
 await sql("CREATE INDEX IF NOT EXISTS mm_response_outbox_ready ON mm_response_outbox(next_attempt_at) WHERE completed_at IS NULL");
 await sql("CREATE TABLE IF NOT EXISTS mm_reports(id BIGSERIAL PRIMARY KEY,user_id BIGINT NOT NULL,body TEXT,created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("CREATE TABLE IF NOT EXISTS mm_updates(id BIGINT PRIMARY KEY)");
+await sql("CREATE TABLE IF NOT EXISTS mm_user_recovery(user_id BIGINT NOT NULL,field TEXT NOT NULL,value JSONB NOT NULL,saved_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(user_id,field))");
 await sql("ALTER TABLE mm_updates ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
 await sql("CREATE INDEX IF NOT EXISTS mm_update_age ON mm_updates(created_at)");
 await sql("CREATE TABLE IF NOT EXISTS mm_telegram_update_queue(update_id BIGINT PRIMARY KEY,payload JSONB NOT NULL,received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),locked_until TIMESTAMPTZ,completed_at TIMESTAMPTZ)");
@@ -116,7 +118,22 @@ const send=async(id,text,markup)=>{
 };
 const buttons=rows=>({inline_keyboard:rows.map(row=>row.map(([text,callback_data])=>({text,callback_data})))});
 async function change(id,fields){let sets=[],vals=[];for(const [k,v] of Object.entries(fields)){const json=v!==null&&typeof v==="object";vals.push(json?JSON.stringify(v):v);sets.push(k+"=$"+vals.length+(json?"::jsonb":""));}vals.push(id);await sql("UPDATE mm_users SET "+sets.join(",")+" WHERE id=$"+vals.length,...vals)}
-async function who(f){return(await sql("INSERT INTO mm_users(id,username,first_name) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name RETURNING *",f.id,f.username||null,f.first_name||""))[0]}
+async function who(f){
+ await sql("INSERT INTO mm_users(id,username,first_name) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name RETURNING id",f.id,f.username||null,f.first_name||"");
+ const size=(await sql("SELECT octet_length(filters::text)::int AS filters_bytes,octet_length(profile::text)::int AS profile_bytes FROM mm_users WHERE id=$1",f.id))[0];
+ console.log("Telegram user JSON sizes",f.id,size.filters_bytes,size.profile_bytes);
+ if(size.filters_bytes>131072){
+  await sql("INSERT INTO mm_user_recovery(user_id,field,value) SELECT id,'filters',filters FROM mm_users WHERE id=$1 ON CONFLICT(user_id,field) DO NOTHING",f.id);
+  await sql("UPDATE mm_users SET filters='{}'::jsonb,state='' WHERE id=$1",f.id);
+  console.warn("Oversized user filters moved to recovery",f.id,size.filters_bytes);
+ }
+ if(size.profile_bytes>262144){
+  await sql("INSERT INTO mm_user_recovery(user_id,field,value) SELECT id,'profile',profile FROM mm_users WHERE id=$1 ON CONFLICT(user_id,field) DO NOTHING",f.id);
+  await sql("UPDATE mm_users SET profile='{}'::jsonb WHERE id=$1",f.id);
+  console.warn("Oversized user profile moved to recovery",f.id,size.profile_bytes);
+ }
+ return(await sql("SELECT * FROM mm_users WHERE id=$1",f.id))[0];
+}
 const consentNames=["Оферта и правила сервиса","Обработка персональных данных","Показ анкеты другим"];
 const inviteCreationQueue=createConsentEditQueue();
 let cachedDocHashes=null,cachedDocHashesUntil=0;
