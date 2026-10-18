@@ -69,3 +69,24 @@ test("multiple requested professions are OR matched while empty selection allows
  expect(matchesWantedProfileRoles(["фотограф","визажист"],"модель")).toBe(false);
  expect(matchesWantedProfileRoles([],"модель")).toBe(true);
 });
+
+import {incompleteProfileFields} from "../engine.ts";
+test("pseudonym and explicit first name remain different fields",()=>{
+ const profile=parseFields("Имя: Аня\nПсевдоним: Анна Крылатая\nРазмер обуви (по желанию): 38\nНавыки (по желанию): танцы\nАгентская комиссия (если есть): 20%");
+ expect(field(profile,"имя")).toBe("Аня");
+ expect(field(profile,"псевдоним")).toBe("Анна Крылатая");
+ expect(field(profile,"размер обуви")).toBe("38");
+ expect(field(profile,"навыки")).toBe("танцы");
+ expect(field(profile,"агентская комиссия")).toBe("20%");
+});
+test("model must complete seven matching fields and photo, or gaps are explained",()=>{
+ const profile={"кто вы":"модель, актёр","имя":"Анна","дата рождения":"12.09.2002","город":"Москва"};
+ const gaps=incompleteProfileFields(profile,null);
+ for(const key of ["рост","пол","формат","прайс","главное фото"])expect(gaps).toContain(key);
+ expect(incompleteProfileFields({...profile,"пол":"женский","рост":"172","размер одежды":"42","цвет волос":"русый","длина волос":"длинные","формат":"ТФП","прайс":"3000 ₽/час"},"tg-photo-id")).toEqual([]);
+});
+test("specialist portfolio is mandatory for matching, but other roles can start without one",()=>{
+ const base={"кто вы":"визажист","имя":"Анна","дата рождения":"12.09.2002","город":"Москва"};
+ expect(incompleteProfileFields(base,"photo")).toContain("портфолио");
+ expect(incompleteProfileFields({...base,"кто вы":"бренд"},"photo")).not.toContain("портфолио");
+});
