@@ -182,6 +182,22 @@ export function roleMatch(want,roleText){
 }
 
 
+export function incompleteProfileFields(profile,hasKeyPhoto){
+ const p=profile||{},missing=[];
+ for(const key of ["кто вы","имя","дата рождения","город"])if(!field(p,key))missing.push(key);
+ const age=ageAt(field(p,"дата рождения"));
+ if(age===null||age<18||age>110)missing.push("возраст 18+");
+ const roles=field(p,"кто вы").toLowerCase().split(",").map(x=>x.trim());
+ if(roles.some(x=>MODEL_ROLES.includes(x))){
+  for(const key of ["пол","рост","размер одежды","цвет волос","длина волос","формат","прайс"])
+   if(!field(p,key))missing.push(key);
+ }else if(roles.some(x=>/фотограф|видеограф|визажист|стилист|бьюти-мастер/.test(x))&&!field(p,"портфолио")){
+  missing.push("портфолио");
+ }
+ if(!hasKeyPhoto)missing.push("главное фото");
+ return [...new Set(missing)];
+}
+
 export function eligibleProfile(profile,hasKeyPhoto){
  const p=profile||{};
  if(!hasKeyPhoto)return false;
