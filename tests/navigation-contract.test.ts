@@ -15,7 +15,8 @@ const actions=Object.fromEntries([
  ["myinvites",'if(a==="myinvites")'],
  ["pause",'if(a==="pause")'],
  ["how",'if(c.data==="how")'],
- ["more",'if(a==="more")']
+ ["more",'if(a==="more")'],
+ ["demo:home",'if(c.data?.startsWith("demo:"))']
 ]);
 
 test("every button in the main navigation has a corresponding action handler",()=>{
@@ -78,4 +79,28 @@ test("accepted invitation and accepted response actions are recovered by durable
  expect(source).toContain("processAcceptedInvitationOutbox()");
  expect(source).toContain("processAcceptedResponseOutbox()");
  expect(source).toContain("processInvitationOutbox()");
+});
+
+test("sample catalog button opens twenty explicitly fictional cards, no live response or invite callbacks",()=>{
+ expect(source).toContain('callback_data:"demo:home"');
+ expect(source).toContain('if(c.data?.startsWith("demo:"))return demoScreen');
+ expect(source).toContain('demoPage(route.type,route.page)');
+ expect(source).toContain('demoItem(route.type,route.id)');
+ const demo=source.slice(source.indexOf("function demoMenu()"),source.indexOf("let responseWorkerRunning=false;"));
+ expect(demo).toContain("вымышлен");
+ expect(demo).not.toContain('"reply:"');
+ expect(demo).not.toContain('"invite:"');
+ expect(demo).not.toContain('"relay:"');
+});
+test("new editor accepts pasted template before choosing a role and provides working guided routes",()=>{
+ const callback=source.slice(source.indexOf("async function onCallback(c){"));
+ const editor=callback.slice(callback.indexOf('if(a==="edit_profile"){'),callback.indexOf('if(a==="profile_save"){'));
+ expect(editor.indexOf('await change(id,{state:"profile",filters})')).toBeLessThan(editor.indexOf('return send(id,"📝 <b>Создание анкеты</b>'));
+ expect(editor).toContain('a==="template_model"||a==="template_client"');
+ expect(editor).toContain('if(a==="profile_step_model"||a==="profile_step_client")');
+ expect(editor).toContain('return startWizard(u,role)');
+ expect(editor).toContain('"profile_templates"');
+ expect(editor).toContain('"wizard:cancel"');
+ expect(editor).toContain('"home"');
+ expect(source).toContain('if(u.state==="profile"){');
 });
