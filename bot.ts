@@ -698,6 +698,7 @@ async function onCallback(c){
  if(a==="test:docs")return send(id,testConsentDetails,testConsentBoard(u));
  if(onboardingClick){
   if(!testMode()||!testReady())return send(id,"Регистрация пока недоступна.");
+  const firstSignup=!canUseTestFeatures(Bun.env,u.consent);
   const accepted=await activateTestAccess(sql,id);
   if(!accepted)return send(id,"Отметьте все три пункта, чтобы продолжить.",testConsentBoard(u));
   u={...u,consent:accepted.consent,active:true};
@@ -710,7 +711,7 @@ async function onCallback(c){
   }
   const referral=parseReferralOnboard(a);
   if(referral){
-   if(referral.id!==id){
+   if(firstSignup&&pending===a&&referral.id!==id){
     const inviter=(await sql("SELECT id FROM mm_users WHERE id=$1",referral.id))[0];
     if(inviter)await sql("INSERT INTO mm_referrals(inviter,invitee) VALUES($1,$2) ON CONFLICT(invitee) DO NOTHING",referral.id,id);
    }
