@@ -689,7 +689,7 @@ async function onCallback(c){
   if(!testMode())return send(id,"Эта функция сейчас недоступна.");
   await revokeTestAccess(sql,id);
   await sql("UPDATE mm_jobs SET paused=TRUE WHERE owner=$1 AND status='active'",id);
-  return send(id,"Анкета скрыта из каталога, активные заявки остановлены. Данные можно удалить через /deleteaccount. Возобновить поиск можно в главном меню.",buttons([[["🏠 В меню","home"]]));
+  return send(id,"Анкета скрыта из каталога, активные заявки остановлены. Данные можно удалить через /deleteaccount. Возобновить поиск можно в главном меню.",buttons([[["🏠 В меню","home"]]]));
  }
  if(a==="privacy")return send(id,"🔐 <b>Данные и приватность</b>\nЭкспорт показывает сведения, сохранённые сервисом. Удаление аккаунта безвозвратное; ранее отправленные Telegram-сообщения других людей останутся.",buttons([[["📦 Экспорт данных","privacy:export"]],[["🗑 Удалить аккаунт","privacy:delete"]],...(testMode()?[[["Скрыть анкету и остановить заявки","test:revoke"]]]:[]),[["◀️ В меню","home"]]]));
  if(a==="privacy:export"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Сведения ещё не сохранены.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Ошибка отправки файла.");return;}
