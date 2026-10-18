@@ -107,6 +107,7 @@ async function change(id,fields){let sets=[],vals=[];for(const [k,v] of Object.e
 async function who(f){return(await sql("INSERT INTO mm_users(id,username,first_name) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name RETURNING *",f.id,f.username||null,f.first_name||""))[0]}
 const consentNames=["Оферта и правила сервиса","Обработка персональных данных","Показ анкеты другим"];
 const consentEditQueue=createConsentEditQueue();
+const inviteCreationQueue=createConsentEditQueue();
 const testConsentComplete=hasTestAcknowledgements;
 const testConsentBoard=u=>{
  const c=u?.consent||{};
@@ -1092,7 +1093,7 @@ if(a==="editfilters"){await change(id,{state:"filter"});return send(id,"Отпр
  await change(id,{state:"reply_compose",filters:{...(u.filters||{}),replyJobId:jobId}});
  return send(id,"✉️ <b>Отклик на заявку №"+jobId+"</b>\nНапишите своё сообщение заказчику одним текстом: уточните интересующие детали или укажите кодовое слово из заявки.\n\nТекст будет отправлен заказчику, а сам отклик засчитается только после отправки. Для отмены — /cancel.");
 }
-if(a.startsWith("invite:")){
+if(a.startsWith("invite:"))return inviteCreationQueue(id,async()=>{
   const target=Number(a.slice("invite:".length));
   if(!Number.isSafeInteger(target)||target<=0||target===id)return send(id,"Некорректный получатель приглашения.");
   const hashes=await currentDocumentHashes();
@@ -1111,7 +1112,7 @@ if(a.startsWith("invite:")){
   const invited=(await sql("INSERT INTO mm_invitations(from_user,to_user) VALUES($1,$2) RETURNING id",id,target))[0];
   await queueInitialInvitation(sql,invited.id);
   return send(id,"✅ Приглашение №"+invited.id+" сохранено и поставлено в очередь. Бот отправит анкету и кнопки принятия/отклонения.",buttons([[["✉️ Мои приглашения","myinvites"],["🏠 В меню","home"]]]));
- }
+ });
  if(a.startsWith("rejectinvite:")){
  const invitationId=Number(a.slice("rejectinvite:".length));
  const rows=await sql("UPDATE mm_invitations SET status='declined' WHERE id=$1 AND to_user=$2 AND status='sent' RETURNING from_user",invitationId,id);
