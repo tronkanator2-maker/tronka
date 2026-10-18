@@ -419,7 +419,7 @@ async function promptWizard(u){
  if(!item)return finishWizard(u);
  const total=fields.length;
  const existing=profileDraftOf(u)[item.key];
- return send(u.id,"✍️ <b>Анкета · шаг "+(step+1)+" из "+total+"</b>\n\n"+esc(item.label)+"\nПример: <code>"+esc(item.example)+"</code>"+(existing?"\nСейчас: "+esc(existing):"")+(testMode()&&item.key==="дата рождения"?"\n🧪 Укажите вымышленную дату.":""),buttons([
+ return send(u.id,"✍️ <b>Анкета · шаг "+(step+1)+" из "+total+"</b>\n\n"+esc(item.label)+"\nПример: <code>"+esc(item.example)+"</code>"+(existing?"\nСейчас: "+esc(existing):"")+"",buttons([
   ...(item.required?[]:[[["⏭ Пропустить","wizard:skip"]]]),
   ...(canFinishWizardNow(role,profileDraftOf(u))?[[["✅ Готово · остальные поля потом","wizard:finish_optional"]]]:[]),
   [[["◀️ Назад","wizard:back"],["❌ Отменить","wizard:cancel"]]]
@@ -554,9 +554,9 @@ async function onMessage(m){
  }
  let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
  if(t==="/cancel"){const f=clearJobWizard(discardProfileDraft(u.filters));delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftToken;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
- if(t==="/help")return send(id,"ℹ️ <b>Мир моделей</b>\n/start — главное меню\n/demo — попробовать без анкеты\n/cancel — отмена текущего действия\n/mydata — экспорт своих данных\n/deleteaccount — удалить аккаунт\n\n🧪 Сейчас включён тестовый режим. Используйте вымышленные данные.",buttons([[["👤 Моя анкета","profile"],["ℹ️ Как работает","how"]],[["🏠 В меню","home"]]]));
+ if(t==="/help")return send(id,"ℹ️ <b>Мир моделей</b>\n/start — главное меню\n/demo — попробовать без анкеты\n/cancel — отмена текущего действия\n/mydata — экспорт своих данных\n/deleteaccount — удалить аккаунт\n\nЛичные данные можно посмотреть или удалить через /mydata и /deleteaccount.",buttons([[["👤 Моя анкета","profile"],["ℹ️ Как работает","how"]],[["🏠 В меню","home"]]]));
  if(t==="/teststatus")return send(id,testMode()?"🧪 Тестовый режим активен. Регистрация открыта: "+(testReady()?"да":"нет")+"\nПлатежи отключены.\nТелефон не требуется.":"Тестовый режим выключен.");if(t==="/mydata"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Данных нет.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Не получилось отправить архив. Попробуйте позже.");return;}
- if(t==="/deleteaccount"){await change(id,{state:"delete_confirm"});return send(id,"<b>Удалить аккаунт и данные?</b>\nЭто удалит анкету, фотографии из нашей базы, ваши заявки, историю откликов, отзывов, приглашений, согласий и обращений. Сообщения, ранее отправленные другим пользователям Telegram, стереть удалённо нельзя.\n\nПодтвердите удаление отдельной кнопкой.",buttons([[["❌ Удалить мои данные","deleteaccount:confirm"]],[["Отмена","deleteaccount:cancel"]]]));}if(t==="/subscription"&&testMode())return send(id,"🧪 Тестовый доступ: лимиты заявок, откликов и приглашений для проверки сняты. Настоящие платежи выключены.");if(t==="/subscription")return send(id,hasPaidAccess(u)?"⭐ Подписка или пробный период активны до "+esc(new Date(u.access_until&&new Date(u.access_until)>new Date(u.trial_until||0)?u.access_until:u.trial_until).toLocaleDateString("ru-RU")):"Бесплатный доступ: один отклик, одна заявка и одно приглашение в календарную неделю.");if(t.startsWith("/start")){
+ if(t==="/deleteaccount"){await change(id,{state:"delete_confirm"});return send(id,"<b>Удалить аккаунт и данные?</b>\nЭто удалит анкету, фотографии из нашей базы, ваши заявки, историю откликов, отзывов, приглашений, согласий и обращений. Сообщения, ранее отправленные другим пользователям Telegram, стереть удалённо нельзя.\n\nПодтвердите удаление отдельной кнопкой.",buttons([[["❌ Удалить мои данные","deleteaccount:confirm"]],[["Отмена","deleteaccount:cancel"]]]));}if(t==="/subscription"&&testMode())return send(id,"💳 Сейчас все основные возможности доступны бесплатно. Оформление подписки появится после подключения оплаты.");if(t==="/subscription")return send(id,hasPaidAccess(u)?"⭐ Подписка или пробный период активны до "+esc(new Date(u.access_until&&new Date(u.access_until)>new Date(u.trial_until||0)?u.access_until:u.trial_until).toLocaleDateString("ru-RU")):"Бесплатный доступ: один отклик, одна заявка и одно приглашение в календарную неделю.");if(t.startsWith("/start")){
  if(u.state==="relay"){const filters={...(u.filters||{})};delete filters.relayPeer;await change(id,{state:"",filters});u={...u,state:"",filters};}
  const payload=t.trim().split(/\s+/)[1]||"";
  if(/^ref_\d{2,19}$/.test(payload)){
@@ -578,7 +578,7 @@ async function onMessage(m){
  }
  return begin(u);
 }if(t==="/support"){await change(id,{state:"support"});return send(id,"Опишите проблему одним сообщением.");}if(admin.includes(String(id))&&t==="/stats"){let a=await sql("SELECT (SELECT count(*) FROM mm_users)::int AS users,(SELECT count(*) FROM mm_jobs)::int AS jobs,(SELECT count(*) FROM mm_reports)::int AS reports");return send(id,JSON.stringify(a[0]));}if((u.blocked||u.suspended)&&u.state!=="support")return send(id,"Ваш профиль ограничен; напишите /support.");if(u.state===""&&t&&!t.startsWith("/")&&await feedbackText(id,t,sql,send))return; if(m.contact){
- if(testMode())return send(id,"🧪 В тестовом режиме телефон не нужен. Не отправляйте настоящий номер.");
+ if(testMode())return send(id,"Подтверждение номера для регистрации сейчас не требуется.");
  if(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsentsCurrent(u.consent,await currentDocumentHashes()))return begin(u);
  if(!m.contact.user_id||Number(m.contact.user_id)!==Number(id))return send(id,"Поделитесь своим номером через кнопку Telegram.");
  if(!m.contact.phone_number)return send(id,"Номер не получен. Используйте кнопку подтверждения.");
@@ -668,13 +668,13 @@ async function onCallback(c){
   if(a==="home")return begin(u);
  }
  if(a==="test:revoke"){
-  if(!testMode())return send(id,"Эта функция доступна только в тестовом режиме.");
+  if(!testMode())return send(id,"Эта функция сейчас недоступна.");
   const consent={...(u.consent||{}),test_access:false,test_revoked_at:new Date().toISOString()};
   await change(id,{consent,active:false,state:""});
   await sql("UPDATE mm_jobs SET paused=TRUE WHERE owner=$1 AND status='active'",id);
-  return send(id,"Тестовое согласие отозвано. Анкета больше не участвует в подборе. Удалить все данные: /deleteaccount");
+  return send(id,"Разрешение отозвано. Анкета скрыта из каталога, заявки остановлены. Удаление данных: /deleteaccount");
  }
- if(a==="privacy")return send(id,"🔐 <b>Данные и приватность</b>\nЭкспорт показывает сведения, сохранённые сервисом. Удаление аккаунта безвозвратное; ранее отправленные Telegram-сообщения других людей останутся.",buttons([[["📦 Экспорт данных","privacy:export"]],[["🗑 Удалить аккаунт","privacy:delete"]],...(testMode()?[[["🧪 Отозвать участие в тесте","test:revoke"]]]:[]),[["◀️ В меню","home"]]]));
+ if(a==="privacy")return send(id,"🔐 <b>Данные и приватность</b>\nЭкспорт показывает сведения, сохранённые сервисом. Удаление аккаунта безвозвратное; ранее отправленные Telegram-сообщения других людей останутся.",buttons([[["📦 Экспорт данных","privacy:export"]],[["🗑 Удалить аккаунт","privacy:delete"]],...(testMode()?[[["Отозвать разрешение","test:revoke"]]]:[]),[["◀️ В меню","home"]]]));
  if(a==="privacy:export"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Сведения ещё не сохранены.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Ошибка отправки файла.");return;}
  if(a==="privacy:delete"){await change(id,{state:"delete_confirm"});return send(id,"<b>Подтвердите окончательное удаление</b>\nАнкета, фото и объявления будут удалены из базы. Уже отправленные сообщения в чужих Telegram-чатах сохранятся.",buttons([[["Да, удалить всё","deleteaccount:confirm"]],[["Отменить","deleteaccount:cancel"]]]));}
  if(a==="deleteaccount:cancel"){await change(id,{state:""});return send(id,"Удаление отменено.",menu);}
@@ -704,10 +704,10 @@ async function onCallback(c){
 if(a==="more")return send(id,"⚙️ <b>Дополнительно</b>\nИнформация о проекте, приватность и поддержка.",buttons([
  [["📚 Статьи","articles"],["🎁 Пригласить друга","invitefriend"]],
  [["🔐 Личные данные","privacy"],["❓ Поддержка","support"]],
- [["🧪 Доступ и подписка","access_info"],["🏠 В меню","home"]]
+ [["💳 Доступ и подписка","access_info"],["🏠 В меню","home"]]
 ]));
- if(a==="how")return send(id,"<b>Как работает «Мир моделей»</b>\n\n1. Создайте анкету — можно отвечать по шагам.\n2. Прикрепите ключевое фото (до пяти).\n3. Настройте фильтры по городу, типу работы и оплате.\n4. Найдите заявку и отправьте персональный отклик либо разместите свою заявку.\n5. Принимайте приглашения и отклики, затем договаривайтесь напрямую.\n\n🧪 Пока включено тестирование: используйте только вымышленные данные. Платежи не работают.",buttons([[["👤 Создать анкету","profile"],["📢 Посмотреть заявки","jobs"]],[["🏠 В меню","home"]]]));
- if(a==="access_info")return send(id,testMode()?"🧪 <b>Тестовый доступ открыт</b>\nОплата отключена, лимиты для тестирования сняты. Тестовые данные будут удалены при подготовке к коммерческому запуску.":"Пробный и платный доступ проверяются по текущей подписке.");
+ if(a==="how")return send(id,"<b>Как работает «Мир моделей»</b>\n\n1. Создайте анкету — можно отвечать по шагам.\n2. Прикрепите ключевое фото (до пяти).\n3. Настройте фильтры по городу, типу работы и оплате.\n4. Найдите заявку и отправьте персональный отклик либо разместите свою заявку.\n5. Принимайте приглашения и отклики, затем договаривайтесь напрямую.\n\nОплата через сервис пока недоступна.",buttons([[["👤 Создать анкету","profile"],["📢 Посмотреть заявки","jobs"]],[["🏠 В меню","home"]]]));
+ if(a==="access_info")return send(id,testMode()?"💳 <b>Доступ к сервису</b>\nАнкеты, заявки, отклики и приглашения сейчас доступны без оплаты. Подключение платёжных систем запланировано позже.":"Пробный и платный доступ проверяются по текущей подписке.");
  if(a==="myresponses"){
   const responses=await sql("SELECT r.id,r.job_id,r.status,r.created_at,j.body,j.owner FROM mm_responses r LEFT JOIN mm_jobs j ON j.id=r.job_id WHERE r.user_id=$1 ORDER BY r.created_at DESC LIMIT 15",id);
   if(!responses.length)return send(id,"Вы ещё не отправляли отклики.",buttons([[["📢 Найти заявки","jobs"],["🏠 В меню","home"]]]));
@@ -810,7 +810,7 @@ if(a==="template_model"||a==="template_client"){
  const filters=stageProfileDraft(u.filters,{...profileDraftOf(u),"кто вы":role});
  await change(id,{state:"profile",filters});
  const tpl=a==="template_model"?profileTpl:clientTpl;
- return send(id,"📝 Скопируйте шаблон, заполните и отправьте отдельным сообщением (можно с фото):\n<code>"+esc(tpl)+"</code>\n\nВ тестовом режиме используйте вымышленные данные.");
+ return send(id,"📝 Скопируйте шаблон, заполните и отправьте отдельным сообщением (можно с фото):\n<code>"+esc(tpl)+"</code>\n\n");
 }if(a==="profile_save"){
  if(u.state!=="profile_confirm"||!u.filters?.profileDraft)return send(id,"Черновик не найден. Откройте «Моя анкета» и проверьте изменения.");
  const draft=profileDraftOf(u),errors=validProfile(draft);
@@ -914,7 +914,7 @@ if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправ
   const recent=await sql("SELECT * FROM mm_jobs WHERE status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' AND owner<>$1 ORDER BY created_at DESC LIMIT 40",id);
   js=recent.filter(job=>!isExplicitAdultCasting([get(job.body,"описание"),get(job.body,"требования"),get(job.body,"тип работы")].join(" "))).slice(0,5);
  }
- if(!js.length)return send(id,hasProfile?"Подходящих заявок по выбранным фильтрам пока нет.":"Пока нет открытых заявок для предпросмотра. Можно создать свою тестовую заявку.",buttons([[["🎯 Фильтры","filters"],["➕ Создать заявку","new"]],[["🏠 В меню","home"]]]));
+ if(!js.length)return send(id,hasProfile?"Подходящих заявок по выбранным фильтрам пока нет.":"Пока нет открытых заявок для предпросмотра. Можно создать свою заявку.",buttons([[["🎯 Фильтры","filters"],["➕ Создать заявку","new"]],[["🏠 В меню","home"]]]));
  if(!hasProfile)await send(id,"🔎 <b>Предпросмотр открытых заявок</b>\nМожно посмотреть условия без фото и анкеты. Чтобы откликнуться, сначала создайте профиль и добавьте главное фото.");
  for(const j of js)await card(id,j);
  if(hasProfile&&js.length<=3)await send(id,"По вашим настройкам сейчас "+js.length+" подходящих заявок.");
