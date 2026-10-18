@@ -24,13 +24,15 @@ test("every button in the main navigation has a corresponding action handler",()
  const callbackHandlers=source.slice(source.indexOf("async function onCallback("));
  for(const callback of callbacks)expect(callbackHandlers.includes(actions[callback])).toBe(true);
 });
-test("consent buttons and navigation use separate handlers",()=>{
- for(const route of ['test:consent:','test:docs','test:agree']){
-  expect(source).toContain(route);
- }
- expect(source).toContain("toggleTestAcknowledgement(sql,id,n)");
- expect(source).toContain("activateTestAccess(sql,id)");
- expect(source).toContain("revokeTestAccess(sql,id)");
+test("developer startup no longer draws or persists checkbox agreement",()=>{
+ const callback=source.slice(source.indexOf("async function onCallback("));
+ expect(source).not.toContain("testConsentBoard");
+ expect(source).not.toContain("activateTestAccess(sql,id)");
+ expect(source).not.toContain("toggleTestAcknowledgement(sql,id,n)");
+ expect(source).not.toContain("jsonb_set(COALESCE(filters");
+ expect(callback).toContain('if(a.startsWith("test:consent:")||a==="test:docs"||a==="test:agree")return begin(u)');
+ expect(source).toContain("return send(u.id,testMenuText");
+ expect(source).toContain("if(!fullConsentsCurrent(u.consent,hashes))");
 });
 test("unknown old inline keyboards receive visible feedback",()=>{
  expect(source).toContain("Эта кнопка больше не действует.");
@@ -44,13 +46,13 @@ test("Home action is handled before consent gating and clears stale text-input m
  expect(guarded).toBeGreaterThan(home);
  expect(callbackSection).toContain("leavingToHome(u)");
 });
-test("new users retain deep-link intent through all three checkmarks",()=>{
- expect(source).toContain("parseStartTarget(text)||parseReferralStart(text)");
- expect(source).toContain("pendingStartTarget");
- expect(source).toContain("safeRegistrationTarget(u.filters?.pendingStartTarget)");
- expect(source).toContain("parseReferralOnboard(a)");
+test("developer shared links work directly, without mandatory pending consent",()=>{
+ expect(source).toContain("parseStartTarget(t)?.kind");
+ expect(source).toContain("parseReferralStart(text)");
+ expect(source).toContain("parseOnboardTarget(a)");
+ expect(source).not.toContain("pendingStartTarget");
+ expect(source).toContain('INSERT INTO mm_referrals(inviter,invitee) SELECT id,$2 FROM mm_users');
 });
-
 test("jobs and personal listings use bounded pages instead of sending 20–30 cards",()=>{
  const callback=source.slice(source.indexOf("async function onCallback("));
  expect(callback).toContain('parsePageOffset(a,"jobs")');
