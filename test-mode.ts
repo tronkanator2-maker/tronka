@@ -13,7 +13,7 @@ export const isPreConsentMessageAllowed = (text,state) =>
  isPreConsentCommand(text) || state==="support";
 // Public help and account-control callbacks must stay reachable before consent.
 export const isPreConsentCallback = action =>
- ["more","support","access_info","invitefriend","privacy","privacy:export","privacy:delete",
+ ["home","more","support","access_info","invitefriend","privacy","privacy:export","privacy:delete",
   "deleteaccount:cancel","deleteaccount:confirm","test:revoke"].includes(String(action||""));
 // Each click is a single row-level PostgreSQL update. Updating a JS copy of the
 // entire JSON field loses nearby taps when Telegram delivers callbacks concurrently.
