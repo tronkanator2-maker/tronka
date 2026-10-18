@@ -47,6 +47,9 @@ export const parseFields=text=>{
   const canonical=FIELD_ALIASES[key]||FIELD_ALIASES[match[1].trim().toLowerCase()];
   if(canonical)result[canonical]=match[2].trim().slice(0,3500);
  }
+ // Legacy templates used «Псевдоним» as the display name. Keep them valid while
+ // preserving the pseudonym as its own field if an explicit «Имя» was given.
+ if(!result["имя"]&&result["псевдоним"])result["имя"]=result["псевдоним"];
  return result;
 };
 export const field = (p,key) => Object.entries(p||{}).find(([k])=>k.includes(key))?.[1]||"";
