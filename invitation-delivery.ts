@@ -16,7 +16,7 @@ export async function queueInitialInvitation(sql,invitationId){
  await sql("INSERT INTO mm_invitation_outbox(invitation_id) VALUES($1) ON CONFLICT(invitation_id) DO NOTHING",id);
  return true;
 }
-export async function deliverPendingInvitations(sql,send,showProfile,isEligible,limit=5){
+export async function deliverPendingInvitations(sql,send,showProfile,isEligible,afterDelivery=async()=>{},limit=5){
  const ready=await sql(`SELECT o.*,i.from_user,i.to_user,i.status AS invitation_status
   FROM mm_invitation_outbox o
   JOIN mm_invitations i ON i.id=o.invitation_id
@@ -58,6 +58,7 @@ export async function deliverPendingInvitations(sql,send,showProfile,isEligible,
    if(!controls?.ok)throw Error("Invitation action buttons could not be sent");
    await sql("UPDATE mm_invitation_outbox SET completed_at=NOW(),step=3,attempts=0 WHERE invitation_id=$1",item.invitation_id);
    completed++;
+   try{await afterDelivery(recipient)}catch(e){console.warn("Invitation safety notice deferred",String(e))}
   }catch(error){
    failed++;
    console.warn("Initial invitation delivery deferred",String(item.invitation_id),String(error));
