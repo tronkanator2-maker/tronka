@@ -1,6 +1,7 @@
 import {SQL} from "bun";
 import {parseStartTarget,parseOnboardTarget,parseReferralStart,parseReferralOnboard,safeRegistrationTarget} from "./deep-links.ts";
 import {leavingToHome} from "./navigation-state.ts";
+import {prepareAcceptedResponseOutbox,acceptResponseForOwner,deliverAcceptedResponses} from "./response-acceptance.ts";
 import {parsePageOffset,pageNavigation} from "./pagination.ts";
 import {getGuide,guideMenu} from "./guides.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard} from "./job-wizard.ts";
@@ -85,6 +86,7 @@ await sql("CREATE INDEX IF NOT EXISTS mm_support_message_ticket ON mm_support_me
 await setupFeedback(sql);
 await prepareEntitlements(sql);
 await prepareRelay(sql);
+await prepareAcceptedResponseOutbox(sql);
 await prepareDocuments(sql);
 await setupSourceHealth(sql);
 
@@ -1138,22 +1140,19 @@ if(a.startsWith("acceptinvite:")){
  return send(id,"✅ Приглашение принято. Теперь можно связаться с партнёром.",{inline_keyboard:[senderButtons]});
 }
 if(a.startsWith("acceptresponse:")){
- const rId=Number(a.slice("acceptresponse:".length));
- const rows=await sql("UPDATE mm_responses r SET status='accepted',accepted_at=NOW() FROM mm_jobs j WHERE r.id=$1 AND r.job_id=j.id AND j.owner=$2 AND r.status='pending' RETURNING r.*",rId,id);
- if(!rows.length)return send(id,"Отклик уже обработан.");
- const j=(await sql("SELECT body FROM mm_jobs WHERE id=$1",rows[0].job_id))[0];
- await scheduleFeedback(sql,"response",rows[0].id,id,rows[0].user_id,get(j.body,"дата съёмки"));
- const applicant=(await sql("SELECT username FROM mm_users WHERE id=$1",rows[0].user_id))[0];
- const client=(await sql("SELECT username FROM mm_users WHERE id=$1",id))[0];
- const applicantButtons=[{text:"💬 Через бота",callback_data:"relay:"+rows[0].user_id}];
- if(applicant?.username)applicantButtons.unshift({text:"✉️ В Telegram",url:"https://t.me/"+applicant.username});
- await send(id,"✅ Отклик принят. Вы можете связаться с участником:",{inline_keyboard:[applicantButtons]});
- const clientButtons=[{text:"💬 Через бота",callback_data:"relay:"+id}];
- if(client?.username)clientButtons.unshift({text:"✉️ В Telegram",url:"https://t.me/"+client.username});
- await send(rows[0].user_id,"✅ Ваш отклик принят! Теперь можно обсудить детали.",{inline_keyboard:[clientButtons]});
- return;
-}
-if(a.startsWith("declineresponse:")){
+  const responseId=Number(a.slice("acceptresponse:".length));
+  const accepted=await acceptResponseForOwner(sql,responseId,id);
+  if(!accepted)return send(id,"Отклик недоступен или уже отклонён.",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
+  // Feedback scheduling is idempotent and must not block notification delivery.
+  try{
+   const job=(await sql("SELECT body FROM mm_jobs WHERE id=$1",accepted.jobId))[0];
+   await scheduleFeedback(sql,"response",accepted.id,id,accepted.userId,get(job?.body||{},"дата съёмки"));
+  }catch(error){console.warn("Accepted response feedback deferred",String(error))}
+  return send(id,accepted.newlyAccepted?
+   "✅ Отклик принят. Уведомление участнику поставлено в очередь.":"✅ Этот отклик уже принят. Уведомление находится в очереди или доставлено.",
+   buttons([[["💬 Написать участнику","relay:"+accepted.userId]],[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
+ }
+ if(a.startsWith("declineresponse:")){
  const rId=Number(a.slice("declineresponse:".length));
  const rows=await sql("UPDATE mm_responses r SET status='declined' FROM mm_jobs j WHERE r.id=$1 AND r.job_id=j.id AND j.owner=$2 AND r.status='pending' RETURNING r.id,r.user_id",rId,id);
  if(!rows.length)return send(id,"Отклик уже обработан.");
@@ -1303,6 +1302,14 @@ async function saveReport(u,txt,photo=null){
  await send(u.id,"Обращение записано. Модератор сможет его проверить.");
 }
 
+let acceptanceWorkerRunning=false;
+async function processAcceptedResponseOutbox(){
+ if(acceptanceWorkerRunning)return;
+ acceptanceWorkerRunning=true;
+ try{await ensure();await deliverAcceptedResponses(sql,send)}
+ finally{acceptanceWorkerRunning=false}
+}
+
 Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){
  try{await ensure()}catch(e){
   console.error("Database not ready:",String(e));
@@ -1326,6 +1333,7 @@ Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){
 setInterval(()=>ensure().then(()=>feedbackTick(sql,send)).catch(e=>console.error("feedback job",String(e))),60*60*1000);
 setInterval(()=>runFanoutBatch().catch(e=>console.error("fanout tick",String(e))),5000);
 setInterval(()=>processResponseOutbox().catch(e=>console.error("response outbox tick",String(e))),5000);
+setInterval(()=>processAcceptedResponseOutbox().catch(e=>console.error("accepted response outbox tick",String(e))),5000);
 setInterval(()=>consumeCollectorInbox().catch(e=>console.error("collector inbox",String(e))),5000);
 setInterval(()=>ensure().then(()=>reviewSourceHealth(sql)).catch(e=>console.error("source health",String(e))),24*60*60*1000);
 setInterval(()=>ensure().then(async()=>{
@@ -1334,6 +1342,7 @@ setInterval(()=>ensure().then(async()=>{
  await sql("DELETE FROM mm_fanout_queue WHERE pending=FALSE AND completed_at<NOW()-INTERVAL '90 days'");
  }).catch(e=>console.error("maintenance",String(e))),24*60*60*1000);
 setTimeout(()=>runFanoutBatch().catch(e=>console.error("fanout startup",String(e))),4000);
+setTimeout(()=>processAcceptedResponseOutbox().catch(e=>console.error("accepted response startup",String(e))),7000);
 if(token&&secret&&Bun.env.PUBLIC_URL)(async()=>{
  const me=await call("getMe",{});
  if(!me.ok){console.error("Telegram token failed getMe validation");return}
