@@ -60,3 +60,20 @@ test("jobs and personal listings use bounded pages instead of sending 20–30 ca
  expect(callback).toContain('const page=js.slice(offset,offset+5)');
  expect(callback).toContain('const page=items.slice(0,5)');
 });
+
+test("invitation issue serializes double-clicks and queues delivery instead of synchronously sending a profile",()=>{
+ const cb=source.slice(source.indexOf("async function onCallback("));
+ const issue=cb.slice(cb.indexOf('if(a.startsWith("invite:"))'),cb.indexOf('if(a.startsWith("rejectinvite:"))'));
+ expect(source).toContain("const inviteCreationQueue=createConsentEditQueue()");
+ expect(issue).toContain("inviteCreationQueue(id,async()=>");
+ expect(issue).toContain("queueInitialInvitation(sql,invited.id)");
+ expect(issue).toContain("queueInitialInvitation(sql,duplicate.id)");
+ expect(issue).not.toContain("await profile(p.id,u");
+});
+test("accepted invitation and accepted response actions are recovered by durable retry queues",()=>{
+ expect(source).toContain("acceptInvitationForRecipient(sql,inviteId,id)");
+ expect(source).toContain("acceptResponseForOwner(sql,responseId,id)");
+ expect(source).toContain("processAcceptedInvitationOutbox()");
+ expect(source).toContain("processAcceptedResponseOutbox()");
+ expect(source).toContain("processInvitationOutbox()");
+});
