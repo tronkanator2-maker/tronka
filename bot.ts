@@ -5,7 +5,7 @@ import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
 import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
 import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer,toggleProfileRole,canFinishWizardNow} from "./profile-wizard.ts";
-import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,isPreConsentCallback,toggleTestAcknowledgement,activateTestAccess,revokeTestAccess,testWarning,testMenuText} from "./test-mode.ts";
+import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,isPreConsentCallback,isPreConsentMessageAllowed,toggleTestAcknowledgement,activateTestAccess,revokeTestAccess,testWarning,testMenuText} from "./test-mode.ts";
 import {redactContacts,publicProfileEntries,publicProfileAllowed} from "./visibility.ts";
 import {adminApp} from "./admin.ts";
 import {setupSourceHealth,allowanceForModel,reviewSourceHealth} from "./source-health.ts";
@@ -557,7 +557,7 @@ async function onMessage(m){
   return send(m.from.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации документов и проверки интеграций. Пока можно посмотреть демонстрацию.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));
  }
  let u=await who(m.from);
- if(testMode()&&testReady()&&!canUseTestFeatures(Bun.env,u.consent)&&!isPreConsentCommand(text))
+ if(testMode()&&testReady()&&!canUseTestFeatures(Bun.env,u.consent)&&!isPreConsentMessageAllowed(text,u.state))
   return send(u.id,"✨ <b>Добро пожаловать в «Мир моделей»!</b>\nПрочитайте три пункта и отметьте каждый перед началом.",testConsentBoard(u));
  let id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
  if(t==="/cancel"){const f=clearJobWizard(discardProfileDraft(u.filters));delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftToken;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
