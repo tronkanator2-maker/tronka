@@ -341,6 +341,7 @@ async function browseProfiles(u,offset=0){
  const rows=[];
  if(nav.length)rows.push(nav);
  rows.push([["⚙️ Профессия","browse_roles"],["🏙 Город","browse_city"]]);
+ rows.push([["🎬 10 демо-анкет (вымышленные)","demo:profiles:0"]]);
  rows.push([["🏠 В меню","home"]]);
  await send(u.id,"🔎 <b>Каталог анкет</b> • показаны "+page.length+" из "+publicProfiles.length+
   "\nГород: "+esc(city||"все")+" · Профессия: "+esc(requested.join(", ")||"все"),buttons(rows));
@@ -973,12 +974,13 @@ if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправ
    js=recent.filter(job=>!isExplicitAdultCasting([get(job.body,"описание"),get(job.body,"требования"),get(job.body,"тип работы")].join(" "))).slice(0,5);
   }
   const page=js.slice(offset,offset+5);
-  if(!page.length)return send(id,offset?"На этой странице заявок больше нет.":"Подходящих заявок пока нет. Попробуйте изменить фильтры.",buttons([[["🎯 Фильтры","filters"],["➕ Создать заявку","new"]],[["🏠 В меню","home"]]]));
+  if(!page.length)return send(id,offset?"На этой странице заявок больше нет.":"Подходящих заявок пока нет. Попробуйте изменить фильтры.",buttons([[["🎯 Фильтры","filters"],["➕ Создать заявку","new"]],[["🎬 10 демо-заявок (вымышленные)","demo:jobs:0"]],[["🏠 В меню","home"]]]));
   if(!hasProfile&&offset===0)await send(id,"🔎 <b>Предпросмотр открытых заявок</b>\nМожно посмотреть условия без готовой анкеты. Для отклика создайте профиль и добавьте главное фото.");
   for(const job of page)await card(id,job);
   const nav=pageNavigation("jobs",offset,js.length>offset+5);
   const controls=[];
   if(nav.length)controls.push(nav);
+  controls.push([["🎬 10 демо-заявок","demo:jobs:0"]]);
   controls.push([["🎯 Фильтры","filters"],["🏠 В меню","home"]]);
   return send(id,"📢 Показано заявок: "+page.length+". Используйте кнопки для других страниц.",buttons(controls));
  }
