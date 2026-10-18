@@ -60,9 +60,9 @@ test("support, privacy and cancellation work before registration",()=>{
 });
 
 test("public support and account menu callbacks bypass the onboarding loop",()=>{
- for(const callback of ["more","support","access_info","invitefriend","privacy","privacy:export","privacy:delete","deleteaccount:cancel","deleteaccount:confirm","test:revoke"])
+ for(const callback of ["home","more","support","access_info","invitefriend","privacy","privacy:export","privacy:delete","deleteaccount:cancel","deleteaccount:confirm","test:revoke"])
   expect(isPreConsentCallback(callback)).toBe(true);
- for(const callback of ["profile","browse:0","jobs","new","publish","reply:123","home"])
+ for(const callback of ["profile","browse:0","jobs","new","publish","reply:123"])
   expect(isPreConsentCallback(callback)).toBe(false);
 });
 
