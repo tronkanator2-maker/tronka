@@ -1,5 +1,5 @@
 import {test,expect} from "bun:test";
-import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,isPreConsentCallback,toggleTestAcknowledgement,activateTestAccess,revokeTestAccess,testWarning} from "../test-mode.ts";
+import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,isPreConsentCallback,isPreConsentMessageAllowed,toggleTestAcknowledgement,activateTestAccess,revokeTestAccess,testWarning} from "../test-mode.ts";
 import {parseFields,field} from "../engine.ts";
 
 const testEnv={REGISTRATION_ENABLED:"true",TEST_MODE:"true"};
@@ -111,4 +111,11 @@ test("confirmation requires three stored database flags, revoke clears them",asy
  await revokeTestAccess(async sql=>{revokeSQL=sql;return [{consent:{test_access:false}}]},42);
  expect(revokeSQL).toContain("test_revoked_at");
  for(const key of ["test_check_0","test_check_1","test_check_2"])expect(revokeSQL).toContain("-'"+key+"'");
+});
+
+test("support message after tapping Support passes registration gate",()=>{
+ expect(isPreConsentMessageAllowed("Не работает кнопка","support")).toBe(true);
+ expect(isPreConsentMessageAllowed("/cancel","support")).toBe(true);
+ expect(isPreConsentMessageAllowed("Обычное сообщение","")).toBe(false);
+ expect(isPreConsentMessageAllowed("Обычное сообщение","delete_confirm")).toBe(false);
 });
