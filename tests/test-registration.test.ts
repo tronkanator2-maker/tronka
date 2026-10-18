@@ -1,5 +1,5 @@
 import {test,expect} from "bun:test";
-import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,testWarning} from "../test-mode.ts";
+import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,isPreConsentCallback,testWarning} from "../test-mode.ts";
 import {parseFields,field} from "../engine.ts";
 
 const testEnv={REGISTRATION_ENABLED:"true",TEST_MODE:"true"};
@@ -57,4 +57,11 @@ test("support, privacy and cancellation work before registration",()=>{
   expect(isPreConsentCommand(cmd)).toBe(true);
  for(const cmd of ["/start","/somewrongcommand","/supportevil","hi"])
   expect(isPreConsentCommand(cmd)).toBe(false);
+});
+
+test("public support and account menu callbacks bypass the onboarding loop",()=>{
+ for(const callback of ["more","support","access_info","invitefriend","privacy","privacy:export","privacy:delete","deleteaccount:cancel","deleteaccount:confirm","test:revoke"])
+  expect(isPreConsentCallback(callback)).toBe(true);
+ for(const callback of ["profile","browse:0","jobs","new","publish","reply:123","home"])
+  expect(isPreConsentCallback(callback)).toBe(false);
 });
