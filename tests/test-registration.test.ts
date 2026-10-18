@@ -10,15 +10,14 @@ test("test registration opens before legal documents are published, but only in 
  expect(canRegister({REGISTRATION_ENABLED:"true",TEST_MODE:"false"},true)).toBe(true);
  expect(canRegister({REGISTRATION_ENABLED:"false",TEST_MODE:"true"},false)).toBe(false);
 });
-test("test consent is distinct from published legal consent",()=>{
- expect(canUseTestFeatures(testEnv,{})).toBe(false);
- expect(canUseTestFeatures(testEnv,{0:true,1:true,2:true})).toBe(false);
- expect(canUseTestFeatures(testEnv,{test_access:true})).toBe(false);
- expect(canUseTestFeatures(testEnv,{test_access:true,test_check_0:true,test_check_1:true,test_check_2:true})).toBe(true);
- expect(canUseTestFeatures(testEnv,{test_access:false})).toBe(false);
- expect(canUseTestFeatures({TEST_MODE:"false"},{test_access:true})).toBe(false);
- expect(testWarning).toContain("Добро пожаловать");
- expect(testWarning).toContain("разрешаете сервису сохранять");
+test("developer mode opens all sections without checkbox or invented legal consent",()=>{
+ for(const c of [undefined,null,{},{"test_access":false},{"test_access":true},{
+  "test_check_0":false,"test_check_1":false,"test_check_2":false
+ }])expect(canUseTestFeatures(testEnv,c)).toBe(true);
+ expect(canUseTestFeatures({TEST_MODE:"true",REGISTRATION_ENABLED:"false"},{})).toBe(false);
+ expect(canUseTestFeatures({TEST_MODE:"false",REGISTRATION_ENABLED:"true"},{test_access:true,test_check_0:true,test_check_1:true,test_check_2:true})).toBe(false);
+ // Public launch still requires approved versioned legal documents.
+ expect(canRegister({REGISTRATION_ENABLED:"true",TEST_MODE:"false"},false)).toBe(false);
  expect(testWarning).not.toContain("ТЕСТОВЫЙ РЕЖИМ");
 });
 test("copied instructions in model template do not become profile fields",()=>{
@@ -35,22 +34,14 @@ test("job date with е instead of ё is normalized",()=>{
  expect(job["дата съёмки"]).toBe("27.10.2026");
 });
 
-test("three separate onboarding acknowledgements are required",()=>{
- const flags={test_check_0:true,test_check_1:true,test_check_2:true};
- expect([0,1,2].every(i=>flags["test_check_"+i]===true)).toBe(true);
- for(const i of [0,1,2])expect([0,1,2].every(j=>({...flags,["test_check_"+i]:false})["test_check_"+j]===true)).toBe(false);
-});
-
-test("access is gated by all three test acknowledgements, not a stale approval flag",()=>{
- const c={test_access:true,test_check_0:true,test_check_1:true,test_check_2:true};
- expect(hasTestAcknowledgements(c)).toBe(true);
- expect(canUseTestFeatures(testEnv,c)).toBe(true);
+test("historical checkbox values never gate a developer account",()=>{
+ const prior={test_access:false,test_check_0:false,test_check_1:false,test_check_2:false};
+ expect(hasTestAcknowledgements(prior)).toBe(false);
+ expect(canUseTestFeatures(testEnv,prior)).toBe(true);
  for(const i of [0,1,2]){
-  const partial={...c,["test_check_"+i]:false};
-  expect(hasTestAcknowledgements(partial)).toBe(false);
-  expect(canUseTestFeatures(testEnv,partial)).toBe(false);
+  const c={...prior,["test_check_"+i]:true};
+  expect(canUseTestFeatures(testEnv,c)).toBe(true);
  }
- expect(canUseTestFeatures(testEnv,{...c,test_access:false})).toBe(false);
 });
 test("support, privacy and cancellation work before registration",()=>{
  for(const cmd of ["/support","/mydata","/deleteaccount","/cancel","/help","/id","/support hello"])
