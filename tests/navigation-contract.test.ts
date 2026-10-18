@@ -195,6 +195,9 @@ test("catalog page sends one summary and opens one currently visible profile at 
 
 test("a sixth new photo gives a visible limit response and does not trap upload state",()=>{
  const upload=source.slice(source.indexOf('if(m.photo?.length&&u.state==="photo")'),source.indexOf('if(u.state==="relay")'));
+ expect(source).toContain("INSERT INTO mm_user_recovery(user_id,field,value) SELECT id,'photos',photos");
+ expect(source).toContain("SET photos=CASE WHEN photo IS NULL THEN '[]'::jsonb ELSE jsonb_build_array(photo) END");
+ expect(upload).toContain("CASE WHEN jsonb_typeof(photos)='array' THEN jsonb_array_length(photos)<5");
  expect(upload).toContain('if(!saved.length)');
  expect(upload).toContain('await change(id,{state:""})');
  expect(upload).toContain('"🖼 Управление фото","photos"');

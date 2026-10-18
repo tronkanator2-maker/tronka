@@ -86,6 +86,8 @@ await sql("ALTER TABLE mm_jobs ADD COLUMN IF NOT EXISTS paused BOOLEAN NOT NULL 
 await sql("ALTER TABLE mm_users ADD COLUMN IF NOT EXISTS suspended BOOLEAN NOT NULL DEFAULT FALSE");
 await sql("ALTER TABLE mm_users ADD COLUMN IF NOT EXISTS first_source TEXT");
 await sql("ALTER TABLE mm_users ADD COLUMN IF NOT EXISTS photos JSONB NOT NULL DEFAULT '[]'");
+await sql("INSERT INTO mm_user_recovery(user_id,field,value) SELECT id,'photos',photos FROM mm_users WHERE jsonb_typeof(photos) IS DISTINCT FROM 'array' ON CONFLICT(user_id,field) DO NOTHING");
+await sql("UPDATE mm_users SET photos=CASE WHEN photo IS NULL THEN '[]'::jsonb ELSE jsonb_build_array(photo) END WHERE jsonb_typeof(photos) IS DISTINCT FROM 'array'");
 await sql("UPDATE mm_users SET photos=jsonb_build_array(photo) WHERE photo IS NOT NULL AND photos='[]'::jsonb");
 await sql("CREATE INDEX IF NOT EXISTS mm_jobs_active_expiry ON mm_jobs(status,expires_at)");
 await sql("CREATE TABLE IF NOT EXISTS mm_referrals(inviter BIGINT NOT NULL,invitee BIGINT PRIMARY KEY,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),CHECK(inviter<>invitee))");
@@ -667,7 +669,7 @@ if((Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql))||!allConsent
 if(m.photo?.length&&u.state==="photo"){
  const file=m.photo[m.photo.length-1].file_id;
  // Append using one database statement; simultaneous Telegram album parts cannot lose photo IDs.
- const saved=await sql("UPDATE mm_users SET photos=CASE WHEN photos @> jsonb_build_array($2::text) THEN photos ELSE photos || jsonb_build_array($2::text) END,photo=COALESCE(photo,$2) WHERE id=$1 AND (jsonb_array_length(photos)<5 OR photos @> jsonb_build_array($2::text)) RETURNING photos",id,file);
+ const saved=await sql("UPDATE mm_users SET photos=CASE WHEN jsonb_typeof(photos)='array' THEN CASE WHEN photos @> jsonb_build_array($2::text) THEN photos ELSE photos || jsonb_build_array($2::text) END ELSE jsonb_build_array($2::text) END,photo=COALESCE(photo,$2) WHERE id=$1 AND CASE WHEN jsonb_typeof(photos)='array' THEN jsonb_array_length(photos)<5 OR photos @> jsonb_build_array($2::text) ELSE TRUE END RETURNING photos",id,file);
  if(!saved.length){
   await change(id,{state:""});
   return send(id,"В анкете уже пять фотографий — это предел. Чтобы добавить новую, сначала удалите одну из сохранённых.",buttons([[["🖼 Управление фото","photos"],["👤 Моя анкета","profile"]]]));
