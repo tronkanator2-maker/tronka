@@ -37,6 +37,23 @@ test("developer startup no longer draws or persists checkbox agreement",()=>{
 test("unknown old inline keyboards receive visible feedback",()=>{
  expect(source).toContain("Эта кнопка больше не действует.");
 });
+test("Telegram callbacks are acknowledged before database initialization and failures are shown to the user",()=>{
+ const fetcher=source.slice(source.indexOf("Bun.serve({"),source.indexOf("setInterval("));
+ const webhook=fetcher.slice(fetcher.indexOf('if(u.pathname==="/webhook"'),fetcher.indexOf("try{await ensure()}catch"));
+ expect(webhook.indexOf('await call("answerCallbackQuery"')).toBeGreaterThan(-1);
+ expect(webhook.indexOf('await call("answerCallbackQuery"')).toBeLessThan(webhook.indexOf("await ensure()"));
+ expect(webhook).toContain('console.error("Callback action failed"');
+ expect(webhook).toContain("Действие не завершилось из-за временной ошибки.");
+});
+test("user-facing sample pages use clear fictional-example labels and no demo branding",()=>{
+ const exampleMenu=source.slice(source.indexOf("function demoMenu()"),source.indexOf("let profileRefreshWorkerRunning"));
+ expect(exampleMenu).toContain("Примеры анкет");
+ expect(exampleMenu).toContain("Примеры заявок");
+ expect(exampleMenu).toContain("Вымышленный пример");
+ expect(exampleMenu).not.toMatch(/демо/i);
+ expect(source).toContain('{command:"examples",description:"Примеры анкет и заявок"}');
+ expect(source).not.toContain('{command:"demo"');
+});
 
 test("Home action is handled before consent gating and clears stale text-input modes",()=>{
  const callbackSection=source.slice(source.indexOf("async function onCallback("));

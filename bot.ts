@@ -384,7 +384,7 @@ async function backfill(u){const jobs=await sql("SELECT * FROM mm_jobs WHERE sta
 
 function demoMenu(){
  return buttons([
-  [["👤 Демо-анкеты (10)","demo:profiles:0"],["📢 Демо-заявки (10)","demo:jobs:0"]],
+  [["👤 Примеры анкет (10)","demo:profiles:0"],["📢 Примеры заявок (10)","demo:jobs:0"]],
   [["🎯 Фильтры","demo:filters"],["💌 Пример отклика","demo:response"]],
   [["✉️ Пример приглашения","demo:invite"]],
   [["🏠 В главное меню","home"]]
@@ -392,10 +392,10 @@ function demoMenu(){
 }
 async function demoScreen(id,screen="home"){
  const route=demoRoute(screen);
- if(!route)return send(id,"Демо-раздел не найден.",demoMenu());
+ if(!route)return send(id,"Раздел с примерами не найден.",demoMenu());
  if(route.kind==="list"){
   const page=demoPage(route.type,route.page);
-  if(!page)return send(id,"Страница демо не найдена.",demoMenu());
+  if(!page)return send(id,"Страница с примерами не найдена.",demoMenu());
   const label=route.type==="profiles"?"АНКЕТЫ":"ЗАЯВКИ";
   const entries=page.items.map(item=>[
    ["🔎 "+(route.type==="profiles"?item.name+" · "+item.role:item.title),"demo:"+(route.type==="profiles"?"profile":"job")+":"+item.id]
@@ -404,31 +404,31 @@ async function demoScreen(id,screen="home"){
   if(route.page>0)paging.push(["◀️ Назад","demo:"+route.type+":"+(route.page-1)]);
   if(route.page+1<page.pages)paging.push(["Дальше ▶️","demo:"+route.type+":"+(route.page+1)]);
   const rows=[...entries,...(paging.length?[paging]:[]),
-   [["👤 Демо-анкеты","demo:profiles:0"],["📢 Демо-заявки","demo:jobs:0"]],
-   [["🎬 Демо-меню","demo:home"],["🏠 Главное","home"]]];
-  return send(id,"🎬 <b>ДЕМО · "+label+"</b>\n"+
+   [["👤 Примеры анкет","demo:profiles:0"],["📢 Примеры заявок","demo:jobs:0"]],
+   [["📚 К примерам","demo:home"],["🏠 Главное","home"]]];
+  return send(id,"📚 <b>ПРИМЕРЫ · "+label+"</b>\n"+
    "Показано "+page.items.length+" из "+page.total+" · страница "+(page.page+1)+"/"+page.pages+
    "\n\nВсе имена, заказы и условия вымышлены. Это не реальные участники или вакансии; отклики и приглашения отключены.",buttons(rows));
  }
  if(route.kind==="detail"){
   const item=demoItem(route.type,route.id);
-  if(!item)return send(id,"Такая демо-карточка не найдена.",demoMenu());
+  if(!item)return send(id,"Такая карточка-пример не найдена.",demoMenu());
   const isProfile=route.type==="profiles";
   const rows=[],nav=[];
   if(item.id>1)nav.push(["◀️ Предыдущая","demo:"+(isProfile?"profile":"job")+":"+(item.id-1)]);
   if(item.id<10)nav.push(["Следующая ▶️","demo:"+(isProfile?"profile":"job")+":"+(item.id+1)]);
   if(nav.length)rows.push(nav);
-  rows.push([[isProfile?"👥 Все 10 демо-анкет":"📢 Все 10 демо-заявок","demo:"+route.type+":"+Math.floor((item.id-1)/4)]]);
-  rows.push([["🎬 Демо-меню","demo:home"],["🏠 Главное","home"]]);
+  rows.push([[isProfile?"👥 Все 10 примеров анкет":"📢 Все 10 примеров заявок","demo:"+route.type+":"+Math.floor((item.id-1)/4)]]);
+  rows.push([["📚 К примерам","demo:home"],["🏠 Главное","home"]]);
   const body=isProfile
-   ?"👤 <b>ДЕМО-АНКЕТА №"+item.id+"</b>\n\nИмя: "+esc(item.name)+"\nПрофессия: "+esc(item.role)+"\nВозраст: "+item.age+"\nГород: "+esc(item.city)+"\nНаправление: "+esc(item.special)+"\nФормат: "+esc(item.format)+"\nО себе: "+esc(item.about)
-   :"📢 <b>ДЕМО-ЗАЯВКА №"+item.id+"</b>\n\nПроект: "+esc(item.title)+"\nГород: "+esc(item.city)+"\nКого ищут: "+esc(item.who)+"\nУсловная оплата: "+esc(item.pay)+"\nДата: "+esc(item.date)+"\nОписание: "+esc(item.description);
-  return send(id,body+"\n\n🎬 <i>Вымышленный пример. Связаться, откликнуться или пригласить этого персонажа нельзя.</i>",buttons(rows));
+   ?"👤 <b>АНКЕТА-ПРИМЕР №"+item.id+"</b>\n\nИмя: "+esc(item.name)+"\nПрофессия: "+esc(item.role)+"\nВозраст: "+item.age+"\nГород: "+esc(item.city)+"\nНаправление: "+esc(item.special)+"\nФормат: "+esc(item.format)+"\nО себе: "+esc(item.about)
+   :"📢 <b>ЗАЯВКА-ПРИМЕР №"+item.id+"</b>\n\nПроект: "+esc(item.title)+"\nГород: "+esc(item.city)+"\nКого ищут: "+esc(item.who)+"\nУсловная оплата: "+esc(item.pay)+"\nДата: "+esc(item.date)+"\nОписание: "+esc(item.description);
+  return send(id,body+"\n\n<i>Вымышленный пример. Связаться, откликнуться или пригласить этого персонажа нельзя.</i>",buttons(rows));
  }
- if(route.kind==="filters")return send(id,"🎬 <b>ДЕМО · Фильтры</b>\n\nПо профессии, городу и формату можно искать реальные анкеты после создания своего профиля. Эти 10 демо-анкет остаются отдельными и не участвуют в живом подборе.",demoMenu());
- if(route.kind==="response")return send(id,"🎬 <b>ДЕМО · Отклик</b>\n\n1. Вы находите реальную заявку.\n2. Заполняете анкету и загружаете фото.\n3. Нажимаете «Откликнуться» и отправляете текст.\n4. После принятия получаете возможность переписываться.\n\nДемо-заявкам нельзя отправлять реальные отклики.",demoMenu());
- if(route.kind==="invite")return send(id,"🎬 <b>ДЕМО · Приглашение</b>\n\n1. Выбираете реального участника из каталога.\n2. Отправляете приглашение.\n3. После его согласия становятся доступны кнопки связи.\n\nВымышленным персонажам приглашения не отправляются.",demoMenu());
- return send(id,"🎬 <b>Демо «Мир моделей»</b>\n\n10 вымышленных анкет и 10 демонстрационных заявок, а также примеры поиска, откликов и приглашений.\n\nЭто безопасный просмотр: данные не публикуются, реальные уведомления никому не отправляются.",demoMenu());
+ if(route.kind==="filters")return send(id,"<b>Фильтры поиска</b>\n\nПо профессии, городу и формату можно искать реальные анкеты после заполнения профиля. Карточки-примеры остаются отдельными и не участвуют в живом подборе.",demoMenu());
+ if(route.kind==="response")return send(id,"<b>Как работает отклик</b>\n\n1. Вы находите актуальную заявку.\n2. Заполняете анкету и загружаете фото.\n3. Нажимаете «Откликнуться» и отправляете сообщение.\n4. После принятия сможете переписываться с заказчиком.\n\nНа карточки-примеры отправить отклик нельзя.",demoMenu());
+ if(route.kind==="invite")return send(id,"<b>Как работает приглашение</b>\n\n1. Выбираете участника из каталога.\n2. Отправляете приглашение.\n3. После его согласия становятся доступны кнопки связи.\n\nВымышленным персонажам приглашения отправить нельзя.",demoMenu());
+ return send(id,"📚 <b>Примеры анкет и заявок</b>\n\nЗдесь собраны 10 вымышленных анкет и 10 примеров заявок, а также показано, как работают поиск, отклики и приглашения. Примеры не публикуются в общем каталоге, а реальные уведомления никому не отправляются.",demoMenu());
 }
 
 let profileRefreshWorkerRunning=false;
@@ -609,7 +609,7 @@ async function submitResponse(u,body){
 async function onMessage(m){
  if(m.chat?.type&&m.chat.type!=="private"){await onSourcePost(m);return}
  const text=String(m.text||"");
- if(text==="/demo")return demoScreen(m.from.id);
+ if(text==="/examples"||text==="/demo")return demoScreen(m.from.id);
   if(text==="/help")return send(m.from.id,getGuide("getting-started").text,buttons([[["📚 Другие материалы","articles"],["✨ Начать","onboard:home"]]]));
  if(text==="/id")return send(m.from.id,"Telegram ID: <code>"+m.from.id+"</code>");
  if(text.startsWith("/start")&&(Bun.env.REGISTRATION_ENABLED!=="true"||(!testMode()&&!(await legalReady(sql))))){
@@ -619,9 +619,9 @@ async function onMessage(m){
  const referralStart=testMode()&&testReady()?parseReferralStart(text):null;
  const firstVisit=referralStart?!(await sql("SELECT id FROM mm_users WHERE id=$1",m.from.id)).length:false;
  let u=await who(m.from);
- let id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
+ let id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/examples"||t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
  if(t==="/cancel"){const f=clearJobWizard(discardProfileDraft(u.filters));delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftToken;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
- if(t==="/help")return send(id,"ℹ️ <b>Мир моделей</b>\n/start — главное меню\n/demo — попробовать без анкеты\n/cancel — отмена текущего действия\n/mydata — экспорт своих данных\n/deleteaccount — удалить аккаунт\n\nЛичные данные можно посмотреть или удалить через /mydata и /deleteaccount.",buttons([[["👤 Моя анкета","profile"],["ℹ️ Как работает","how"]],[["🏠 В меню","home"]]]));
+ if(t==="/help")return send(id,"ℹ️ <b>Мир моделей</b>\n/start — главное меню\n/examples — примеры анкет и заявок\n/cancel — отмена текущего действия\n/mydata — экспорт своих данных\n/deleteaccount — удалить аккаунт\n\nЛичные данные можно посмотреть или удалить через /mydata и /deleteaccount.",buttons([[["👤 Моя анкета","profile"],["ℹ️ Как работает","how"]],[["🏠 В меню","home"]]]));
  if(t==="/teststatus"&&admin.includes(String(id)))return send(id,testMode()?"🧪 Тестовый режим активен. Регистрация открыта: "+(testReady()?"да":"нет")+"\nПлатежи отключены.\nТелефон не требуется.":"Тестовый режим выключен.");if(t==="/mydata"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Данных нет.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Не получилось отправить архив. Попробуйте позже.");return;}
  if(t==="/deleteaccount"){await change(id,{state:"delete_confirm"});return send(id,"<b>Удалить аккаунт и данные?</b>\nЭто удалит анкету, фотографии из нашей базы, ваши заявки, историю откликов, отзывов, приглашений, согласий и обращений. Сообщения, ранее отправленные другим пользователям Telegram, стереть удалённо нельзя.\n\nПодтвердите удаление отдельной кнопкой.",buttons([[["❌ Удалить мои данные","deleteaccount:confirm"]],[["Отмена","deleteaccount:cancel"]]]));}if(t==="/subscription"&&testMode())return send(id,"💳 Сейчас все основные возможности доступны бесплатно. Оформление подписки появится после подключения оплаты.");if(t==="/subscription")return send(id,hasPaidAccess(u)?"⭐ Подписка или пробный период активны до "+esc(new Date(u.access_until&&new Date(u.access_until)>new Date(u.trial_until||0)?u.access_until:u.trial_until).toLocaleDateString("ru-RU")):"Бесплатный доступ: один отклик, одна заявка и одно приглашение в календарную неделю.");if(t.startsWith("/start")){
  const exited=leavingToHome(u);
@@ -716,7 +716,6 @@ if(u.state==="browse_city"){
  if(u.state==="filter"){let p=parse(t);await change(id,{filters:{...(u.filters||{}),city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});await send(id,"Фильтры сохранены. Подбираю актуальные заявки.",menu);const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await queueProfileRefresh(sql,id);return showFilterMenu(fresh)}
 return begin(u)}
 async function onCallback(c){
- void call("answerCallbackQuery",{callback_query_id:c.id}).catch(e=>console.warn("Callback acknowledgment delayed",String(e)));
  if(c.data?.startsWith("demo:"))return demoScreen(c.from.id,c.data.slice(5));
  if(c.data==="docs")return send(c.from.id,"Документы сервиса: "+esc((Bun.env.PUBLIC_URL||"").replace(/\/$/,"")+"/documents"));
   if(c.data==="articles")return send(c.from.id,"📚 <b>Полезные материалы</b>\nВыберите тему:",buttons([...guideMenu().map(([title,key])=>[[title,key]]),[["◀️ В меню","home"]]]));
@@ -1353,10 +1352,36 @@ async function processAcceptedResponseOutbox(){
 }
 
 Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){
- try{await ensure()}catch(e){
-  console.error("Database not ready:",String(e));
-  return new Response("Service temporarily unavailable",{status:503,headers:{"cache-control":"no-store"}});
- }const documents=await publicDocumentRoute(r,sql);if(documents)return documents;const dashboard=await adminApp(r,sql,dispatch,async (id,message)=>{
+ let u=new URL(r.url);
+ if(u.pathname==="/health"){try{await ensure();return Response.json({ok:true,registration:Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql),test_mode:testMode(),legal_documents_approved:await legalDocumentsReady(sql),schema:"ready"})}catch(e){console.error("Health check failed:",String(e));return new Response("Database unavailable",{status:503})}}
+ if(u.pathname==="/webhook"&&r.method==="POST"){
+  if(!secret||r.headers.get("x-telegram-bot-api-secret-token")!==secret)return new Response("Forbidden",{status:403});
+  const started=Date.now();let updateId;
+  try{
+   const x=await r.json();updateId=x?.update_id;
+   if(x.callback_query?.id){try{await call("answerCallbackQuery",{callback_query_id:x.callback_query.id})}catch(e){console.warn("Callback acknowledgment failed",String(e))}}
+   await ensure();
+   let ok=await sql("INSERT INTO mm_updates(id) VALUES($1) ON CONFLICT DO NOTHING RETURNING id",x.update_id);
+   if(ok.length){
+    try{
+     if(x.message?.from||x.message?.chat?.type!=="private")if(x.message)await onMessage(x.message);
+     if(x.channel_post)await onSourcePost(x.channel_post);
+     if(x.callback_query?.from){
+      try{await onCallback(x.callback_query)}catch(e){
+       console.error("Callback action failed",JSON.stringify({updateId:x.update_id,userId:x.callback_query.from.id,action:x.callback_query.data,error:String(e),stack:e?.stack||""}));
+       try{await send(x.callback_query.from.id,"Действие не завершилось из-за временной ошибки. Попробуйте ещё раз или отправьте /start.",buttons([[ ["🏠 Главное меню","home"],["❓ Поддержка","support"] ]]));}
+       catch(notifyError){console.error("Callback error notice failed",String(notifyError))}
+      }
+     }
+    }catch(e){await sql("DELETE FROM mm_updates WHERE id=$1",x.update_id);throw e}
+   }
+   return new Response("ok")
+  }catch(e){console.error("Update error",String(e));if(updateId!==undefined){try{await sql("DELETE FROM mm_updates WHERE id=$1",updateId)}catch(cleanupError){console.error("Update cleanup failed",String(cleanupError))}}return new Response("error",{status:500})}
+  finally{const ms=Date.now()-started;if(ms>1800)console.warn("Slow Telegram webhook:",ms,"ms")}
+ }
+ try{await ensure()}catch(e){console.error("Database not ready:",String(e));return new Response("Service temporarily unavailable",{status:503,headers:{"cache-control":"no-store"}})}
+ const documents=await publicDocumentRoute(r,sql);if(documents)return documents;
+ const dashboard=await adminApp(r,sql,dispatch,async (id,message)=>{
  const reports=await sql("SELECT * FROM mm_reports_v2 WHERE id=$1",id);
  if(!reports.length)throw Error("Обращение не найдено");
  const target=reports[0].reporter;
@@ -1364,14 +1389,7 @@ Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){
  if(!sent.ok)throw Error("Telegram не доставил ответ.");
  await sql("INSERT INTO mm_support_messages(ticket_id,sender,body) VALUES($1,'support',$2)",id,message);
  await sql("UPDATE mm_reports_v2 SET status='in_progress',updated_at=NOW() WHERE id=$1",id);
-});if(dashboard)return dashboard;let u=new URL(r.url);if(u.pathname==="/health"){try{await ensure();return Response.json({ok:true,registration:Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql),test_mode:testMode(),legal_documents_approved:await legalDocumentsReady(sql),schema:"ready"})}catch(e){return new Response("Database unavailable",{status:503})}}if(u.pathname==="/webhook"&&r.method==="POST"){if(!secret||r.headers.get("x-telegram-bot-api-secret-token")!==secret)return new Response("Forbidden",{status:403});const started=Date.now();try{await ensure();let x=await r.json();let ok=await sql("INSERT INTO mm_updates(id) VALUES($1) ON CONFLICT DO NOTHING RETURNING id",x.update_id);if(ok.length){
-  try {
-    if(x.message?.from||x.message?.chat?.type!=="private")if(x.message)await onMessage(x.message);
-    if(x.channel_post)await onSourcePost(x.channel_post);
-    if(x.callback_query?.from)await onCallback(x.callback_query);
-  }catch(e){await sql("DELETE FROM mm_updates WHERE id=$1",x.update_id);throw e}
- }
- return new Response("ok")}catch(e){console.error("Update error",String(e));return new Response("error",{status:500})}finally{const ms=Date.now()-started;if(ms>1800)console.warn("Slow Telegram webhook:",ms,"ms");}}return new Response("World Models Bot")}})
+});if(dashboard)return dashboard;return new Response("World Models Bot")}})
 setInterval(()=>ensure().then(()=>feedbackTick(sql,send)).catch(e=>console.error("feedback job",String(e))),60*60*1000);
 setInterval(()=>runFanoutBatch().catch(e=>console.error("fanout tick",String(e))),5000);
 setInterval(()=>processResponseOutbox().catch(e=>console.error("response outbox tick",String(e))),5000);
@@ -1402,7 +1420,7 @@ if(token&&secret&&Bun.env.PUBLIC_URL)(async()=>{
  const commands=[
   {command:"start",description:"Открыть главное меню"},
   {command:"help",description:"Как пользоваться ботом"},
-  {command:"demo",description:"Показать демо"},
+  {command:"examples",description:"Примеры анкет и заявок"},
   {command:"cancel",description:"Отменить действие"},
   {command:"mydata",description:"Экспортировать мои данные"},
   {command:"deleteaccount",description:"Удалить мой аккаунт"}
