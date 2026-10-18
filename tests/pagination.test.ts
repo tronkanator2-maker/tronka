@@ -19,3 +19,9 @@ test("pagination creates usable back/forward buttons only when needed",()=>{
  expect(pageNavigation("jobs",10,false)).toEqual([["◀️ Назад","jobs:5"]]);
  expect(pageNavigation("mine",0,false)).toEqual([]);
 });
+
+test("Next button stops at last permitted offset instead of producing a dead jobs:105 link",()=>{
+ expect(pageNavigation("jobs",95,true)).toEqual([["◀️ Назад","jobs:90"],["Дальше ▶️","jobs:100"]]);
+ expect(pageNavigation("jobs",100,true)).toEqual([["◀️ Назад","jobs:95"]]);
+ expect(pageNavigation("mine",100,true)).toEqual([["◀️ Назад","mine:95"]]);
+});
