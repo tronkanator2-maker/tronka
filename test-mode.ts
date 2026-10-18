@@ -4,8 +4,10 @@ export const canRegister = (env,hasApprovedLegalDocs) =>
  env.REGISTRATION_ENABLED==="true" && (isTestMode(env)||hasApprovedLegalDocs);
 export const hasTestAcknowledgements = consent =>
  [0,1,2].every(i=>consent?.["test_check_"+i]===true);
-export const canUseTestFeatures = (env,consent) =>
- isTestMode(env) && consent?.test_access===true && hasTestAcknowledgements(consent);
+// Development-only access: no checkboxes, no implied agreement, no stored
+// legal consent. Production always uses versioned published documents.
+export const canUseTestFeatures = (env,_consent) =>
+ isTestMode(env) && env.REGISTRATION_ENABLED==="true";
 export const isPreConsentCommand = text =>
  /^\/(?:mydata|deleteaccount|support|cancel|help|id)(?:\s|$)/.test(String(text||""));
 // A user who opened Support must be allowed to send the actual report text.
