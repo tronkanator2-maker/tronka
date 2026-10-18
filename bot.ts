@@ -1,4 +1,5 @@
 import {SQL} from "bun";
+import {getGuide,guideMenu} from "./guides.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
 import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
@@ -651,6 +652,13 @@ async function onCallback(c){
  await call("answerCallbackQuery",{callback_query_id:c.id});
  if(c.data?.startsWith("demo:"))return demoScreen(c.from.id,c.data.slice(5));
  if(c.data==="docs")return send(c.from.id,"Документы сервиса: "+esc((Bun.env.PUBLIC_URL||"").replace(/\/$/,"")+"/documents"));
+  if(c.data==="articles")return send(c.from.id,"📚 <b>Полезные материалы</b>\nВыберите тему:",buttons([...guideMenu().map(([title,key])=>[[title,key]]),[["◀️ В меню","home"]]]));
+  if(c.data?.startsWith("guide:")){
+   const g=getGuide(c.data.slice(6));
+   if(!g)return send(c.from.id,"Материал не найден.",buttons([[["📚 Все статьи","articles"]]]));
+   return send(c.from.id,g.text,buttons([[["📚 Другие материалы","articles"],["🏠 В меню","home"]]]));
+  }
+
  const requestedAction=String(c.data||"");
  const onboardingClick=requestedAction==="test:agree"||requestedAction.startsWith("onboard:");
  if(testMode()&&!onboardingClick&&!["test:revoke","privacy","privacy:export","privacy:delete","deleteaccount:cancel","deleteaccount:confirm"].includes(requestedAction)){
@@ -695,18 +703,13 @@ async function onCallback(c){
  await change(id,{consent:co});
  await recordConsent(sql,id,["offer","processing","distribution"][n],co[n]);
  return call("editMessageReplyMarkup",{chat_id:id,message_id:c.message.message_id,reply_markup:consentBoard({...u,consent:co},hashes)});
-}if(await feedbackCallback(a,id,sql,send))return;if(a==="articles"){
- const available=(await latestDocuments(sql)).filter(d=>["overview","safety","portfolio"].includes(d.slug));
- if(!available.length)return send(id,"Статьи ещё готовятся. После утверждения владельцем они появятся здесь.");
- const base=(Bun.env.PUBLIC_URL||"").replace(/\/$/,"");
- return send(id,"📚 <b>Полезные статьи</b>\nВыберите тему:",{inline_keyboard:available.map(d=>[{text:d.title,url:base+"/documents/"+encodeURIComponent(d.slug)}])});
-}
+}if(await feedbackCallback(a,id,sql,send))return;
 if(a==="more")return send(id,"⚙️ <b>Дополнительно</b>\nИнформация о проекте, приватность и поддержка.",buttons([
  [["📚 Статьи","articles"],["🎁 Пригласить друга","invitefriend"]],
  [["🔐 Личные данные","privacy"],["❓ Поддержка","support"]],
  [["💳 Доступ и подписка","access_info"],["🏠 В меню","home"]]
 ]));
- if(a==="how")return send(id,"<b>Как работает «Мир моделей»</b>\n\n1. Создайте анкету — можно отвечать по шагам.\n2. Прикрепите ключевое фото (до пяти).\n3. Настройте фильтры по городу, типу работы и оплате.\n4. Найдите заявку и отправьте персональный отклик либо разместите свою заявку.\n5. Принимайте приглашения и отклики, затем договаривайтесь напрямую.\n\nОплата через сервис пока недоступна.",buttons([[["👤 Создать анкету","profile"],["📢 Посмотреть заявки","jobs"]],[["🏠 В меню","home"]]]));
+ if(a==="how")return send(id,getGuide("getting-started").text,buttons([[["📚 Все материалы","articles"],["🏠 В меню","home"]]]));
  if(a==="access_info")return send(id,testMode()?"💳 <b>Доступ к сервису</b>\nАнкеты, заявки, отклики и приглашения сейчас доступны без оплаты. Подключение платёжных систем запланировано позже.":"Пробный и платный доступ проверяются по текущей подписке.");
  if(a==="myresponses"){
   const responses=await sql("SELECT r.id,r.job_id,r.status,r.created_at,j.body,j.owner FROM mm_responses r LEFT JOIN mm_jobs j ON j.id=r.job_id WHERE r.user_id=$1 ORDER BY r.created_at DESC LIMIT 15",id);
