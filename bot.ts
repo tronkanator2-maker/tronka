@@ -428,7 +428,7 @@ async function finishWizard(u){
  const summary=Object.entries(draft).map(([key,value])=>esc(key)+": "+esc(value)).join("\n");
  return send(u.id,"✅ <b>Анкета заполнена</b>\n\n"+summary+"\n\nТеперь сохраните анкету и добавьте главное фото.",buttons([[["✅ Сохранить анкету","profile_save"],["✏️ Исправить","edit_profile"]]]));
 }
-async function showWizardRolePage(id,page=0,selected=[]){
+async function showWizardRolePage(id,page=0,selected=[],editMessageId=null){
  const perPage=8,totalPages=Math.ceil(WIZARD_ROLES.length/perPage);
  const current=Math.max(0,Math.min(totalPages-1,page)),chosen=Array.isArray(selected)?selected:[];
  const roles=WIZARD_ROLES.slice(current*perPage,(current+1)*perPage),rows=[];
@@ -439,9 +439,14 @@ async function showWizardRolePage(id,page=0,selected=[]){
  if(paging.length)rows.push(paging);
  rows.push([["➡️ Продолжить ("+chosen.length+")","wizard:roles_done"]]);
  rows.push([["❌ Отмена","wizard:cancel"]]);
- return send(id,"🪄 <b>Анкета · кто вы?</b>\nСтраница "+(current+1)+" из "+totalPages+
+ const content="🪄 <b>Анкета · кто вы?</b>\nСтраница "+(current+1)+" из "+totalPages+
   "\n\nМожно выбрать несколько профессий. «Модель» и «актёр» совместимы друг с другом, но не со специальностями съёмочной команды."+
-  "\n\nВыбрано: "+esc(chosen.join(", ")||"пока ничего"),buttons(rows));
+  "\n\nВыбрано: "+esc(chosen.join(", ")||"пока ничего");
+ if(editMessageId){
+  const edited=await call("editMessageText",{chat_id:id,message_id:editMessageId,text:content,parse_mode:"HTML",reply_markup:buttons(rows)});
+  if(edited?.ok||/message is not modified/i.test(String(edited?.description||"")))return edited;
+ }
+ return send(id,content,buttons(rows));
 }
 async function startWizard(u,role){
  if(!String(role).split(",").map(x=>x.trim()).every(x=>WIZARD_ROLES.includes(x)))return send(u.id,"Выберите профессии из справочника.");
@@ -737,7 +742,7 @@ if(a==="docs")return send(id,"Все опубликованные докумен
  }
  if(a.startsWith("wizard:page:")){
   const page=Number(a.slice("wizard:page:".length));
-  return showWizardRolePage(id,Number.isInteger(page)?page:0,u.filters?.wizardSelected||[]);
+  return showWizardRolePage(id,Number.isInteger(page)?page:0,u.filters?.wizardSelected||[],c.message?.message_id);
  }
  if(a.startsWith("wizard:role:")){
   const index=Number(a.slice("wizard:role:".length)),role=WIZARD_ROLES[index];
@@ -746,7 +751,7 @@ if(a==="docs")return send(id,"Все опубликованные докумен
   const filters={...(u.filters||{}),wizardSelected:selected.selected};
   await change(id,{filters});
   if(selected.error)await send(id,"ℹ️ "+esc(selected.error));
-  return showWizardRolePage(id,Math.floor(index/8),selected.selected);
+  return showWizardRolePage(id,Math.floor(index/8),selected.selected,c.message?.message_id);
  }
  if(a==="wizard:roles_done"){
   const selected=u.filters?.wizardSelected||[];
