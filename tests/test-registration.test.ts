@@ -1,5 +1,5 @@
 import {test,expect} from "bun:test";
-import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,isPreConsentCallback,testWarning} from "../test-mode.ts";
+import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,isPreConsentCallback,toggleTestAcknowledgement,activateTestAccess,revokeTestAccess,testWarning} from "../test-mode.ts";
 import {parseFields,field} from "../engine.ts";
 
 const testEnv={REGISTRATION_ENABLED:"true",TEST_MODE:"true"};
@@ -64,4 +64,51 @@ test("public support and account menu callbacks bypass the onboarding loop",()=>
   expect(isPreConsentCallback(callback)).toBe(true);
  for(const callback of ["profile","browse:0","jobs","new","publish","reply:123","home"])
   expect(isPreConsentCallback(callback)).toBe(false);
+});
+
+test("checkbox persistence uses an atomic JSONB update instead of replacing stale JS consent",async()=>{
+ const statements=[];
+ const query=async (sql,...values)=>{
+  statements.push({sql,values});
+  return [{consent:{test_check_0:true,test_check_1:true}}];
+ };
+ const updated=await toggleTestAcknowledgement(query,123456,1);
+ expect(updated.changed).toBe(true);
+ expect(updated.consent.test_check_0).toBe(true);
+ expect(updated.consent.test_check_1).toBe(true);
+ expect(statements.length).toBe(1);
+ expect(statements[0].values).toEqual([123456,"test_check_1"]);
+ expect(statements[0].sql).toContain("jsonb_set");
+ expect(statements[0].sql).toContain("consent->>$2::text");
+ expect(statements[0].sql).toContain("RETURNING consent");
+ // Never write a read-modify-write snapshot of the entire consent object.
+ expect(statements[0].sql).not.toContain("SET consent=$");
+ expect(await toggleTestAcknowledgement(query,123456,3)).toBeNull();
+ expect(statements.length).toBe(1);
+});
+test("already accepted users cannot unknowingly disable access using old checkbox messages",async()=>{
+ let calls=0;
+ const query=async text=>{
+  calls++;
+  if(text.includes("UPDATE"))return [];
+  return [{consent:{test_access:true,test_check_0:true,test_check_1:true,test_check_2:true}}];
+ };
+ const result=await toggleTestAcknowledgement(query,42,0);
+ expect(result.changed).toBe(false);
+ expect(result.consent.test_access).toBe(true);
+ expect(calls).toBe(2);
+});
+test("confirmation requires three stored database flags, revoke clears them",async()=>{
+ let acceptSQL="";
+ const blocked=await activateTestAccess(async sql=>{acceptSQL=sql;return []},42);
+ expect(blocked).toBeNull();
+ for(const key of ["test_check_0","test_check_1","test_check_2"])
+  expect(acceptSQL).toContain(key);
+ expect(acceptSQL).toContain("RETURNING consent,active");
+ const good=await activateTestAccess(async()=>[{consent:{test_access:true},active:true}],42);
+ expect(good.consent.test_access).toBe(true);
+ let revokeSQL="";
+ await revokeTestAccess(async sql=>{revokeSQL=sql;return [{consent:{test_access:false}}]},42);
+ expect(revokeSQL).toContain("test_revoked_at");
+ for(const key of ["test_check_0","test_check_1","test_check_2"])expect(revokeSQL).toContain("-'"+key+"'");
 });
