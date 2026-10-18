@@ -2,6 +2,7 @@ import {SQL} from "bun";
 import {parseStartTarget,parseOnboardTarget,parseReferralStart,parseReferralOnboard,safeRegistrationTarget} from "./deep-links.ts";
 import {leavingToHome} from "./navigation-state.ts";
 import {prepareAcceptedResponseOutbox,acceptResponseForOwner,deliverAcceptedResponses} from "./response-acceptance.ts";
+import {prepareAcceptedInvitationOutbox,acceptInvitationForRecipient,deliverAcceptedInvitations} from "./invite-acceptance.ts";
 import {parsePageOffset,pageNavigation} from "./pagination.ts";
 import {getGuide,guideMenu} from "./guides.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard} from "./job-wizard.ts";
@@ -87,6 +88,7 @@ await setupFeedback(sql);
 await prepareEntitlements(sql);
 await prepareRelay(sql);
 await prepareAcceptedResponseOutbox(sql);
+await prepareAcceptedInvitationOutbox(sql);
 await prepareDocuments(sql);
 await setupSourceHealth(sql);
 
@@ -1124,22 +1126,16 @@ if(a.startsWith("rejectinvite:")){
  return;
 }
 if(a.startsWith("acceptinvite:")){
- const rows=await sql("UPDATE mm_invitations SET status='accepted' WHERE id=$1 AND to_user=$2 AND status='sent' RETURNING *",Number(a.slice(13)),id);
- if(!rows.length)return send(id,"Приглашение уже обработано.");
- const sender=(await sql("SELECT username,blocked,suspended FROM mm_users WHERE id=$1",rows[0].from_user))[0];
- if(!sender||sender.blocked||sender.suspended){
-  await sql("UPDATE mm_invitations SET status='declined' WHERE id=$1",rows[0].id);
-  return send(id,"Отправитель больше недоступен.");
+  const inviteId=Number(a.slice("acceptinvite:".length));
+  const invitation=await acceptInvitationForRecipient(sql,inviteId,id);
+  if(!invitation)return send(id,"Приглашение недоступно, отклонено или отправитель ограничен.",buttons([[["✉️ Мои приглашения","myinvites"],["🏠 В меню","home"]]]));
+  try{await scheduleFeedback(sql,"invite",invitation.id,invitation.fromUser,invitation.toUser)}
+  catch(error){console.warn("Accepted invitation feedback deferred",String(error))}
+  return send(id,invitation.newlyAccepted?
+   "✅ Приглашение принято! Уведомления о связи поставлены в очередь.":"✅ Приглашение уже принято. Уведомления доставляются или отправлены.",
+   buttons([[["💬 Написать через бота","relay:"+invitation.fromUser]],[["✉️ Мои приглашения","myinvites"],["🏠 В меню","home"]]]));
  }
- await scheduleFeedback(sql,"invite",rows[0].id,rows[0].from_user,rows[0].to_user);
- const peerButtons=[{text:"💬 Написать через бота",callback_data:"relay:"+rows[0].to_user}];
- if(u.username)peerButtons.unshift({text:"✉️ Открыть Telegram",url:"https://t.me/"+u.username});
- await send(rows[0].from_user,"✅ Ваше приглашение принято! Можно обсудить детали напрямую или через бота.",{inline_keyboard:[peerButtons]});
- const senderButtons=[{text:"💬 Написать через бота",callback_data:"relay:"+rows[0].from_user}];
- if(sender.username)senderButtons.unshift({text:"✉️ Открыть Telegram",url:"https://t.me/"+sender.username});
- return send(id,"✅ Приглашение принято. Теперь можно связаться с партнёром.",{inline_keyboard:[senderButtons]});
-}
-if(a.startsWith("acceptresponse:")){
+ if(a.startsWith("acceptresponse:")){
   const responseId=Number(a.slice("acceptresponse:".length));
   const accepted=await acceptResponseForOwner(sql,responseId,id);
   if(!accepted)return send(id,"Отклик недоступен или уже отклонён.",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
@@ -1302,6 +1298,14 @@ async function saveReport(u,txt,photo=null){
  await send(u.id,"Обращение записано. Модератор сможет его проверить.");
 }
 
+let acceptedInvitationWorkerRunning=false;
+async function processAcceptedInvitationOutbox(){
+ if(acceptedInvitationWorkerRunning)return;
+ acceptedInvitationWorkerRunning=true;
+ try{await ensure();await deliverAcceptedInvitations(sql,send)}
+ finally{acceptedInvitationWorkerRunning=false}
+}
+
 let acceptanceWorkerRunning=false;
 async function processAcceptedResponseOutbox(){
  if(acceptanceWorkerRunning)return;
@@ -1334,6 +1338,7 @@ setInterval(()=>ensure().then(()=>feedbackTick(sql,send)).catch(e=>console.error
 setInterval(()=>runFanoutBatch().catch(e=>console.error("fanout tick",String(e))),5000);
 setInterval(()=>processResponseOutbox().catch(e=>console.error("response outbox tick",String(e))),5000);
 setInterval(()=>processAcceptedResponseOutbox().catch(e=>console.error("accepted response outbox tick",String(e))),5000);
+setInterval(()=>processAcceptedInvitationOutbox().catch(e=>console.error("accepted invitation outbox tick",String(e))),5000);
 setInterval(()=>consumeCollectorInbox().catch(e=>console.error("collector inbox",String(e))),5000);
 setInterval(()=>ensure().then(()=>reviewSourceHealth(sql)).catch(e=>console.error("source health",String(e))),24*60*60*1000);
 setInterval(()=>ensure().then(async()=>{
@@ -1343,6 +1348,7 @@ setInterval(()=>ensure().then(async()=>{
  }).catch(e=>console.error("maintenance",String(e))),24*60*60*1000);
 setTimeout(()=>runFanoutBatch().catch(e=>console.error("fanout startup",String(e))),4000);
 setTimeout(()=>processAcceptedResponseOutbox().catch(e=>console.error("accepted response startup",String(e))),7000);
+setTimeout(()=>processAcceptedInvitationOutbox().catch(e=>console.error("accepted invitation startup",String(e))),7500);
 if(token&&secret&&Bun.env.PUBLIC_URL)(async()=>{
  const me=await call("getMe",{});
  if(!me.ok){console.error("Telegram token failed getMe validation");return}
