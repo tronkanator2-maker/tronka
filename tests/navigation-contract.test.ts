@@ -7,10 +7,10 @@ const menuSource=source.slice(source.indexOf("const menu="),source.indexOf("cons
 const actions=Object.fromEntries([
  ["profile",'if(a==="profile")'],
  ["browse:0",'if(a.startsWith("browse:"))'],
- ["jobs",'if(a==="jobs")'],
+ ["jobs",'if(a==="jobs"||a.startsWith("jobs:"))'],
  ["new",'if(a==="new")'],
  ["filters",'if(a==="filters")'],
- ["mine",'if(a==="mine")'],
+ ["mine",'if(a==="mine"||a.startsWith("mine:"))'],
  ["myresponses",'if(a==="myresponses")'],
  ["myinvites",'if(a==="myinvites")'],
  ["pause",'if(a==="pause")'],
@@ -49,4 +49,14 @@ test("new users retain deep-link intent through all three checkmarks",()=>{
  expect(source).toContain("pendingStartTarget");
  expect(source).toContain("safeRegistrationTarget(u.filters?.pendingStartTarget)");
  expect(source).toContain("parseReferralOnboard(a)");
+});
+
+test("jobs and personal listings use bounded pages instead of sending 20–30 cards",()=>{
+ const callback=source.slice(source.indexOf("async function onCallback("));
+ expect(callback).toContain('parsePageOffset(a,"jobs")');
+ expect(callback).toContain('parsePageOffset(a,"mine")');
+ expect(callback).toContain('pageNavigation("jobs",offset,js.length>offset+5)');
+ expect(callback).toContain('pageNavigation("mine",offset,items.length>5)');
+ expect(callback).toContain('const page=js.slice(offset,offset+5)');
+ expect(callback).toContain('const page=items.slice(0,5)');
 });
