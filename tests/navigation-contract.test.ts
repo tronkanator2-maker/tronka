@@ -54,13 +54,14 @@ test("developer shared links work directly, without mandatory pending consent",(
  expect(source).not.toContain("pendingStartTarget");
  expect(source).toContain('INSERT INTO mm_referrals(inviter,invitee) SELECT id,$2 FROM mm_users');
 });
-test("jobs and personal listings use bounded pages instead of sending 20–30 cards",()=>{
+test("job and profile listings use compact bounded pages and personal listings stay paginated",()=>{
  const callback=source.slice(source.indexOf("async function onCallback("));
  expect(callback).toContain('parsePageOffset(a,"jobs")');
  expect(callback).toContain('parsePageOffset(a,"mine")');
- expect(callback).toContain('pageNavigation("jobs",offset,js.length>offset+5)');
  expect(callback).toContain('pageNavigation("mine",offset,items.length>5)');
  expect(callback).toContain('const page=js.slice(offset,offset+5)');
+ expect(source).toContain('const rendered=renderJobsPage(js,offset)');
+ expect(callback).toContain('if(a.startsWith("job_view:"))');
  expect(callback).toContain('const page=items.slice(0,5)');
 });
 

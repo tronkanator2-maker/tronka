@@ -6,6 +6,7 @@ import {prepareAcceptedInvitationOutbox,acceptInvitationForRecipient,deliverAcce
 import {prepareInvitationOutbox,queueInitialInvitation,deliverPendingInvitations} from "./invitation-delivery.ts";
 import {parsePageOffset,pageNavigation} from "./pagination.ts";
 import {renderCatalogPage} from "./catalog-page.ts";
+import {renderJobsPage} from "./jobs-page.ts";
 import {demoPage,demoItem,demoRoute} from "./demo-catalog.ts";
 import {prepareProfileRefreshQueue,queueProfileRefresh,runProfileRefreshBatch} from "./profile-refresh.ts";
 import {runProfileFanoutPage} from "./profile-fanout.ts";
@@ -194,7 +195,7 @@ async function profile(to,u,heading="Анкета",backToCatalog=null){
  if(backToCatalog!==null)rows.push([["◀️ К каталогу",backToCatalog],["🏠 В меню","home"]]);
  return send(to,content,buttons(rows));
 }
-async function card(to,j){
+async function card(to,j,backToJobs=null){
  const p=j.body||{},external=j.owner===0;
  const visible=k=>esc(external?sourceJobDisplayText(get(p,k)):redactContacts(get(p,k)));
  const lines=[
@@ -209,7 +210,9 @@ async function card(to,j){
  ];
  if(get(p,"метка темы"))lines.push("Тематика: "+visible("метка темы"));
  if(external)lines.push("Заказчик не зарегистрирован в боте — сведения о нём не проверены.");
- return send(to,lines.join("\n"),buttons([[["✋ Откликнуться","reply:"+j.id]],[["⚠️ Пожаловаться","reportjob:"+j.id]]]));
+ const rows=[[ ["✋ Откликнуться","reply:"+j.id] ],[ ["⚠️ Пожаловаться","reportjob:"+j.id] ]];
+ if(backToJobs!==null)rows.push([["◀️ К списку заявок",backToJobs],["🏠 В меню","home"]]);
+ return send(to,lines.join("\n"),buttons(rows));
 }
 async function matches(u,j){
  if(!u||u.blocked||u.suspended||!u.active||!allConsentsCurrent(u.consent,await currentDocumentHashes())||!eligibleProfile(u.profile,u.photo)||j.paused||j.status!=="active")return false;
@@ -994,15 +997,18 @@ if(a==="addphoto"){
   const page=js.slice(offset,offset+5);
   if(!page.length)return send(id,offset?"На этой странице заявок больше нет.":"Подходящих заявок пока нет. Попробуйте изменить фильтры.",buttons([[["🎯 Фильтры","filters"],["➕ Создать заявку","new"]],[["🎬 10 демо-заявок (вымышленные)","demo:jobs:0"]],[["🏠 В меню","home"]]]));
   if(!hasProfile&&offset===0)await send(id,"🔎 <b>Предпросмотр открытых заявок</b>\nМожно посмотреть условия без готовой анкеты. Для отклика создайте профиль и добавьте главное фото.");
-  for(const job of page)await card(id,job);
-  const nav=pageNavigation("jobs",offset,js.length>offset+5);
-  const controls=[];
-  if(nav.length)controls.push(nav);
-  controls.push([["🎬 10 демо-заявок","demo:jobs:0"]]);
-  controls.push([["🎯 Фильтры","filters"],["🏠 В меню","home"]]);
-  return send(id,"📢 Показано заявок: "+page.length+". Используйте кнопки для других страниц.",buttons(controls));
+  const rendered=renderJobsPage(js,offset);
+  return send(id,rendered.text,buttons(rendered.rows));
  }
- if(a==="mine"||a.startsWith("mine:")){
+ if(a.startsWith("job_view:")){
+  const match=/^job_view:(\d+):(\d+)$/.exec(a),jobId=match?Number(match[1]):NaN,offset=match?Number(match[2]):NaN;
+  if(!Number.isSafeInteger(jobId)||jobId<=0||!Number.isInteger(offset)||offset<0||offset>100||offset%5!==0)
+   return send(id,"Кнопка заявки устарела. Откройте поиск заново.",buttons([[ ["📢 Найти заявки","jobs"],["🏠 В меню","home"] ]]));
+  const job=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' AND owner<>$2",jobId,id))[0];
+  const accessible=job&&(eligibleProfile(u.profile,u.photo)?await matches(u,job):!isExplicitAdultCasting([get(job.body,"описание"),get(job.body,"требования"),get(job.body,"тип работы")].join(" ")));
+  if(!accessible)return send(id,"Эта заявка больше не подходит или уже закрыта.",buttons([[ ["📢 К списку заявок","jobs:"+offset],["🏠 В меню","home"] ]]));
+  return card(id,job,"jobs:"+offset);
+ } if(a==="mine"||a.startsWith("mine:")){
   const offset=parsePageOffset(a,"mine");
   if(offset===null)return send(id,"Страница списка недоступна.",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
   const items=await sql("SELECT * FROM mm_jobs WHERE owner=$1 ORDER BY id DESC LIMIT 6 OFFSET $2",id,offset);
