@@ -35,3 +35,18 @@ test("consent buttons and navigation use separate handlers",()=>{
 test("unknown old inline keyboards receive visible feedback",()=>{
  expect(source).toContain("Эта кнопка больше не действует.");
 });
+
+test("Home action is handled before consent gating and clears stale text-input modes",()=>{
+ const callbackSection=source.slice(source.indexOf("async function onCallback("));
+ const home=callbackSection.indexOf('if(a==="home"){');
+ const guarded=callbackSection.indexOf('if(Bun.env.REGISTRATION_ENABLED!=="true"');
+ expect(home).toBeGreaterThan(0);
+ expect(guarded).toBeGreaterThan(home);
+ expect(callbackSection).toContain("leavingToHome(u)");
+});
+test("new users retain deep-link intent through all three checkmarks",()=>{
+ expect(source).toContain("parseStartTarget(text)||parseReferralStart(text)");
+ expect(source).toContain("pendingStartTarget");
+ expect(source).toContain("safeRegistrationTarget(u.filters?.pendingStartTarget)");
+ expect(source).toContain("parseReferralOnboard(a)");
+});
