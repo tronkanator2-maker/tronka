@@ -37,7 +37,7 @@ export async function toggleTestAcknowledgement(query,id,index){
  const key="test_check_"+index;
  const rows=await query(`UPDATE mm_users SET consent=
    jsonb_set(
-    jsonb_set(COALESCE(consent,'{}'::jsonb),ARRAY[$2::text],
+    jsonb_set(CASE WHEN jsonb_typeof(consent)='object' THEN consent ELSE '{}'::jsonb END,ARRAY[$2::text],
      to_jsonb(NOT COALESCE((consent->>$2::text)::boolean,FALSE)),TRUE),
     '{test_access}','false'::jsonb,TRUE)
    WHERE id=$1 AND NOT (
@@ -53,7 +53,7 @@ export async function toggleTestAcknowledgement(query,id,index){
 }
 export async function activateTestAccess(query,id){
  const rows=await query(`UPDATE mm_users SET
-   consent=COALESCE(consent,'{}'::jsonb) ||
+   consent=(CASE WHEN jsonb_typeof(consent)='object' THEN consent ELSE '{}'::jsonb END) ||
     jsonb_build_object('test_access',TRUE,'test_at',NOW()::text),
    active=TRUE
    WHERE id=$1 AND (consent->>'test_check_0')='true'
@@ -64,7 +64,7 @@ export async function activateTestAccess(query,id){
 }
 export async function revokeTestAccess(query,id){
  const rows=await query(`UPDATE mm_users SET
-    consent=(COALESCE(consent,'{}'::jsonb)-'test_check_0'-'test_check_1'-'test_check_2')
+    consent=((CASE WHEN jsonb_typeof(consent)='object' THEN consent ELSE '{}'::jsonb END)-'test_check_0'-'test_check_1'-'test_check_2')
       || jsonb_build_object('test_access',FALSE,'test_revoked_at',NOW()::text),
     active=FALSE,state=''
    WHERE id=$1 RETURNING consent`,id);
