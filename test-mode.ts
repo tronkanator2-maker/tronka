@@ -17,6 +17,19 @@ export const isPreConsentCallback = action =>
   "deleteaccount:cancel","deleteaccount:confirm","test:revoke"].includes(String(action||""));
 // Each click is a single row-level PostgreSQL update. Updating a JS copy of the
 // entire JSON field loses nearby taps when Telegram delivers callbacks concurrently.
+// Prevent concurrent Telegram edits from painting stale checkbox boards out of order.
+// Database toggling remains atomic, so this is a UI-ordering layer, not a correctness lock.
+export function createConsentEditQueue(){
+ const pending=new Map();
+ return (userId,work)=>{
+  const key=String(userId);
+  const previous=pending.get(key)||Promise.resolve();
+  const next=previous.catch(()=>{}).then(work);
+  pending.set(key,next);
+  void next.finally(()=>{if(pending.get(key)===next)pending.delete(key)}).catch(()=>{});
+  return next;
+ };
+}
 export async function toggleTestAcknowledgement(query,id,index){
  if(!Number.isInteger(index)||index<0||index>2)return null;
  const key="test_check_"+index;
