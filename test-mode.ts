@@ -8,6 +8,9 @@ export const canUseTestFeatures = (env,consent) =>
  isTestMode(env) && consent?.test_access===true && hasTestAcknowledgements(consent);
 export const isPreConsentCommand = text =>
  /^\/(?:mydata|deleteaccount|support|cancel|help|id)(?:\s|$)/.test(String(text||""));
+// A user who opened Support must be allowed to send the actual report text.
+export const isPreConsentMessageAllowed = (text,state) =>
+ isPreConsentCommand(text) || state==="support";
 // Public help and account-control callbacks must stay reachable before consent.
 export const isPreConsentCallback = action =>
  ["more","support","access_info","invitefriend","privacy","privacy:export","privacy:delete",
