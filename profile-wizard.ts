@@ -53,7 +53,17 @@ export const wizardFields=role=>{
 };
 export function canFinishWizardNow(role,profile){
  const fields=wizardFields(role),saved=profile||{};
- return fields.every(f=>!f.required || String(saved[f.key]??"").trim().length>0);
+ return fields.every(f=>!f.required || wizardAnswer(f,saved[f.key]).ok);
+}
+// Validate structured answers pasted into a template as well as answers entered
+// through the wizard. Missing fields are handled by the profile completeness flow.
+export function structuredProfileErrors(role,profile){
+ const saved=profile||{};
+ return wizardFields(role)
+  .filter(f=>["дата рождения","рост"].includes(f.key)&&String(saved[f.key]??"").trim())
+  .map(f=>wizardAnswer(f,saved[f.key]))
+  .filter(result=>!result.ok)
+  .map(result=>result.error);
 }
 export const wizardField=(role,index)=>wizardFields(role)[index]||null;
 export const wizardCompleted=(role,index)=>index>=wizardFields(role).length;

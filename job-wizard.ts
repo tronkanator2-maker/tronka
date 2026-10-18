@@ -18,8 +18,10 @@ export function validateJobWizardAnswer(field,raw){
  if(v.length>1800)return {ok:false,error:"Максимум 1800 символов."};
  if(field.key==="название заявки"&&v.length>40)return {ok:false,error:"Название должно быть не длиннее 40 символов."};
  if(field.key==="кого ищу"){
-  const choices=v.toLowerCase().split(",").map(x=>x.trim()).filter(Boolean);
-  if(!choices.length||choices.some(x=>!ROLES.includes(x)&&x!=="модель в пару"))
+  const choices=v.toLowerCase().split(",").map(x=>x.trim());
+  if(choices.some(x=>!x))
+   return {ok:false,error:"Перечислите профессии через запятую без пустых значений."};
+  if(choices.some(x=>!ROLES.includes(x)&&x!=="модель в пару"))
    return {ok:false,error:"Укажите профессию из справочника: например, модель, фотограф, визажист."};
  }
  if(field.key==="дата съёмки"){

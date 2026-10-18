@@ -5,13 +5,15 @@ import {prepareAcceptedResponseOutbox,acceptResponseForOwner,deliverAcceptedResp
 import {prepareAcceptedInvitationOutbox,acceptInvitationForRecipient,deliverAcceptedInvitations} from "./invite-acceptance.ts";
 import {prepareInvitationOutbox,queueInitialInvitation,deliverPendingInvitations} from "./invitation-delivery.ts";
 import {parsePageOffset,pageNavigation} from "./pagination.ts";
+import {renderCatalogPage} from "./catalog-page.ts";
 import {demoPage,demoItem,demoRoute} from "./demo-catalog.ts";
 import {prepareProfileRefreshQueue,queueProfileRefresh,runProfileRefreshBatch} from "./profile-refresh.ts";
+import {runProfileFanoutPage} from "./profile-fanout.ts";
 import {getGuide,guideMenu} from "./guides.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
 import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
-import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer,toggleProfileRole,canFinishWizardNow} from "./profile-wizard.ts";
+import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer,toggleProfileRole,canFinishWizardNow,structuredProfileErrors} from "./profile-wizard.ts";
 import {isTestMode,canRegister,canUseTestFeatures,createConsentEditQueue,revokeTestAccess,testMenuText} from "./test-mode.ts";
 import {redactContacts,publicProfileEntries,publicProfileAllowed} from "./visibility.ts";
 import {adminApp} from "./admin.ts";
@@ -64,7 +66,9 @@ await sql("CREATE TABLE IF NOT EXISTS mm_collector_inbox(source_id BIGINT NOT NU
 await sql("CREATE INDEX IF NOT EXISTS mm_collector_ready ON mm_collector_inbox(next_attempt_at) WHERE processed_at IS NULL");
 await sql("ALTER TABLE mm_sources ADD COLUMN IF NOT EXISTS username TEXT");
 await sql("CREATE TABLE IF NOT EXISTS mm_deliveries(user_id BIGINT NOT NULL,job_id BIGINT NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(user_id,job_id))");
-await sql("CREATE TABLE IF NOT EXISTS mm_fanout_queue(job_id BIGINT PRIMARY KEY, cursor_id BIGINT NOT NULL DEFAULT 0,profiles_done BOOLEAN NOT NULL DEFAULT FALSE,pending BOOLEAN NOT NULL DEFAULT TRUE,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),completed_at TIMESTAMPTZ)");
+await sql("CREATE TABLE IF NOT EXISTS mm_fanout_queue(job_id BIGINT PRIMARY KEY, cursor_id BIGINT NOT NULL DEFAULT 0,profile_cursor_id BIGINT NOT NULL DEFAULT 0,generation BIGINT NOT NULL DEFAULT 1,profiles_done BOOLEAN NOT NULL DEFAULT FALSE,pending BOOLEAN NOT NULL DEFAULT TRUE,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),completed_at TIMESTAMPTZ)");
+await sql("ALTER TABLE mm_fanout_queue ADD COLUMN IF NOT EXISTS profile_cursor_id BIGINT NOT NULL DEFAULT 0");
+await sql("ALTER TABLE mm_fanout_queue ADD COLUMN IF NOT EXISTS generation BIGINT NOT NULL DEFAULT 1");
 await sql("CREATE INDEX IF NOT EXISTS mm_fanout_ready ON mm_fanout_queue(next_attempt_at) WHERE pending=TRUE");
 await sql("CREATE TABLE IF NOT EXISTS mm_reports_v2(id BIGSERIAL PRIMARY KEY,reporter BIGINT NOT NULL,target_user BIGINT,target_job BIGINT,kind TEXT NOT NULL DEFAULT 'support',body TEXT NOT NULL DEFAULT '',photo TEXT,created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("CREATE TABLE IF NOT EXISTS mm_profile_deliveries(job_id BIGINT NOT NULL,user_id BIGINT NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(job_id,user_id))");
@@ -153,6 +157,7 @@ function validProfile(p){
  const selected=get(p,"кто вы").split(",").map(x=>x.trim().toLowerCase());
  if(selected.some(r=>!ROLES.includes(r)))missing.push("выберите роли из справочника");
  if(selected.some(x=>MODEL_ROLES.includes(x))&&selected.some(x=>!MODEL_ROLES.includes(x)))missing.push("модель и актёр не совмещаются с другими ролями");
+ missing.push(...structuredProfileErrors(get(p,"кто вы"),p).filter(error=>error.startsWith("Рост ")));
  if(Object.entries(p).some(([k,v])=>!/telegram|контакт|телефон|instagram/i.test(k)&&/@\w{5,}/.test(v)))missing.push("контакты — только в специально отведённых полях");
  if(moderate(get(p,"о себе")).status==="reject")missing.push("запрещённая тема в описании");
  return [...new Set(missing)];
@@ -168,7 +173,7 @@ function validJob(p){
  if(get(p,"дата съёмки")&&jobExpiresAt(get(p,"дата съёмки")).getTime()<Date.now())missing.push("дата съёмки уже прошла");
  return [...new Set(missing)];
 }
-async function profile(to,u,heading="Анкета"){
+async function profile(to,u,heading="Анкета",backToCatalog=null){
  if(!u.profile||!Object.keys(u.profile).length)return;
  const reviews=await feedbackSummary(u.id,sql);
  if((u.photos||[]).length>1){
@@ -186,6 +191,7 @@ async function profile(to,u,heading="Анкета"){
  const own=Number(to)===Number(u.id);
  const rows=own?[[["✏️ Изменить","edit_profile"],["🖼 Управление фото","photos"]]]:
   [[["✉️ Пригласить","invite:"+u.id]],...(reviews.count?[[["⭐ Все отзывы ("+reviews.count+")","allreviews:"+u.id+":0"]]]:[]),[["⚠️ Пожаловаться","reportuser:"+u.id]]];
+ if(backToCatalog!==null)rows.push([["◀️ К каталогу",backToCatalog],["🏠 В меню","home"]]);
  return send(to,content,buttons(rows));
 }
 async function card(to,j){
@@ -245,41 +251,41 @@ async function safetyOnce(u){
 }
 // Webhooks enqueue work; a durable worker sends to recipients in bounded batches.
 async function dispatch(j){
- await sql("INSERT INTO mm_fanout_queue(job_id) VALUES($1) ON CONFLICT(job_id) DO UPDATE SET pending=TRUE,cursor_id=0,profiles_done=FALSE,attempts=0,completed_at=NULL,next_attempt_at=NOW()",j.id);
+ await sql("INSERT INTO mm_fanout_queue(job_id) VALUES($1) ON CONFLICT(job_id) DO UPDATE SET pending=TRUE,cursor_id=0,profile_cursor_id=0,generation=mm_fanout_queue.generation+1,profiles_done=FALSE,attempts=0,completed_at=NULL,next_attempt_at=NOW()",j.id);
 }
 let fanoutRunning=false;
 async function runFanoutBatch(){
  if(fanoutRunning)return;
  fanoutRunning=true;
- let jobId=null;
+ let jobId=null,generation=null;
  try{
   await ensure();
   const queue=(await sql("SELECT * FROM mm_fanout_queue WHERE pending=TRUE AND next_attempt_at<=NOW() ORDER BY next_attempt_at,created_at LIMIT 1"))[0];
   if(!queue)return;
-  jobId=queue.job_id;
+  jobId=queue.job_id;generation=queue.generation;
   const job=(await sql("SELECT * FROM mm_jobs WHERE id=$1",jobId))[0];
   if(!job||job.status!=="active"||job.paused||new Date(job.expires_at)<=new Date()){
-   await sql("UPDATE mm_fanout_queue SET pending=FALSE,completed_at=NOW() WHERE job_id=$1",jobId);return;
+   await sql("UPDATE mm_fanout_queue SET pending=FALSE,completed_at=NOW() WHERE job_id=$1 AND generation=$2",jobId,generation);return;
   }
   if(!queue.profiles_done){
-   await matchingProfilesForJob(job);
-   await sql("UPDATE mm_fanout_queue SET profiles_done=TRUE WHERE job_id=$1",jobId);
+   await runProfileFanoutPage(sql,job,queue,sendMatchedProfile);
+   return;
   }
-  const users=await sql("SELECT * FROM mm_users WHERE id>$1 AND id<>$2 ORDER BY id ASC LIMIT 20",queue.cursor_id,job.owner);
+  const users=await sql("SELECT * FROM mm_users WHERE id>$1 AND id<>$2 ORDER BY id ASC LIMIT 5",queue.cursor_id,job.owner);
   if(!users.length){
-   await sql("UPDATE mm_fanout_queue SET pending=FALSE,completed_at=NOW(),attempts=0 WHERE job_id=$1",jobId);return;
+   await sql("UPDATE mm_fanout_queue SET pending=FALSE,completed_at=NOW(),attempts=0 WHERE job_id=$1 AND generation=$2",jobId,generation);return;
   }
   let last=queue.cursor_id;
   for(const user of users){
    // Each deliverTo records delivery idempotently and handles duplicate messages.
    if(user.active&&!user.blocked&&!user.suspended&&user.photo)await deliverTo(user,job);
    last=user.id;
-   await sql("UPDATE mm_fanout_queue SET cursor_id=$1,attempts=0,next_attempt_at=NOW()+INTERVAL '2 seconds' WHERE job_id=$2",last,jobId);
+   await sql("UPDATE mm_fanout_queue SET cursor_id=$1,attempts=0,next_attempt_at=NOW()+INTERVAL '2 seconds' WHERE job_id=$2 AND generation=$3",last,jobId,generation);
   }
  }catch(e){
   console.error("fanout batch",String(e));
   if(jobId!==null)try{
-   await sql("UPDATE mm_fanout_queue SET attempts=attempts+1,next_attempt_at=NOW()+INTERVAL '30 seconds' WHERE job_id=$1",jobId);
+   await sql("UPDATE mm_fanout_queue SET attempts=attempts+1,next_attempt_at=NOW()+INTERVAL '30 seconds' WHERE job_id=$1 AND generation=$2",jobId,generation);
   }catch(dbErr){console.error("fanout retry",String(dbErr))}
  }finally{fanoutRunning=false}
 }
@@ -305,11 +311,6 @@ async function sendMatchedProfile(job,p){
  return true;
  }catch(e){await sql("DELETE FROM mm_profile_deliveries WHERE job_id=$1 AND user_id=$2",job.id,p.id);throw e}
 }
-async function matchingProfilesForJob(job){
- if(job.owner===0)return;
- const people=await sql("SELECT * FROM mm_users WHERE id<>$1 AND photo IS NOT NULL AND active=TRUE AND blocked=FALSE AND suspended=FALSE LIMIT 120",job.owner);
- for(const p of people)try{await sendMatchedProfile(job,p)}catch(e){console.error("profile delivery",String(e))}
-}
 async function profileBackfill(p){
  if(!eligibleProfile(p.profile,p.photo)||!allConsentsCurrent(p.consent,await currentDocumentHashes()))return;
  const jobs=await sql("SELECT * FROM mm_jobs WHERE owner<>$1 AND owner<>0 AND status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' ORDER BY created_at DESC LIMIT 80",p.id);
@@ -333,20 +334,8 @@ async function browseProfiles(u,offset=0){
   if(city&&!city.split(",").some(c=>get(p.profile,"город").toLowerCase().includes(c.trim())))return false;
   return true;
  });
- const page=publicProfiles.slice(offset,offset+3);
- if(!page.length)await send(u.id,offset?"Других анкет по выбранным фильтрам пока нет.":"Не нашлось подходящих анкет. Попробуйте изменить город или профессию.");
- else for(const p of page)await profile(u.id,p,"Анкета в каталоге");
- const next=offset+page.length<publicProfiles.length;
- const nav=[];
- if(offset>0)nav.push(["◀️ Назад","browse:"+Math.max(0,offset-3)]);
- if(next)nav.push(["Дальше ▶️","browse:"+(offset+3)]);
- const rows=[];
- if(nav.length)rows.push(nav);
- rows.push([["⚙️ Профессия","browse_roles"],["🏙 Город","browse_city"]]);
- rows.push([["🎬 10 демо-анкет (вымышленные)","demo:profiles:0"]]);
- rows.push([["🏠 В меню","home"]]);
- await send(u.id,"🔎 <b>Каталог анкет</b> • показаны "+page.length+" из "+publicProfiles.length+
-  "\nГород: "+esc(city||"все")+" · Профессия: "+esc(requested.join(", ")||"все"),buttons(rows));
+ const page=renderCatalogPage(publicProfiles,offset,city,requested);
+ return send(u.id,page.text,buttons(page.rows));
 }
 async function chooseBrowseRole(u){
  const rows=[[["Все направления","browse_role:all"]]];
@@ -648,10 +637,15 @@ if(m.photo?.length&&u.state==="photo"){
  const file=m.photo[m.photo.length-1].file_id;
  // Append using one database statement; simultaneous Telegram album parts cannot lose photo IDs.
  const saved=await sql("UPDATE mm_users SET photos=CASE WHEN photos @> jsonb_build_array($2::text) THEN photos ELSE photos || jsonb_build_array($2::text) END,photo=COALESCE(photo,$2) WHERE id=$1 AND (jsonb_array_length(photos)<5 OR photos @> jsonb_build_array($2::text)) RETURNING photos",id,file);
- const photos=saved[0]?.photos||[];
+ if(!saved.length){
+  await change(id,{state:""});
+  return send(id,"В анкете уже пять фотографий — это предел. Чтобы добавить новую, сначала удалите одну из сохранённых.",buttons([[["🖼 Управление фото","photos"],["👤 Моя анкета","profile"]]]));
+ }
+ const photos=saved[0].photos||[];
  if(photos.length>=5)await change(id,{state:""});
  if(photos.length===1)await send(id,"Первое фото сохранено — оно будет главным. Можно добавить до пяти фотографий.",buttons([[["✅ Готово","photo_done"]]]));
  if(photos.length>=5){await send(id,"Все пять фотографий сохранены ✅");const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await queueProfileRefresh(sql,id);return begin(fresh)}
+ if(photos.length>1)return send(id,"Фото сохранено. Сейчас в анкете "+photos.length+" из 5 фотографий.",buttons([[["✅ Готово","photo_done"],["🖼 Управление фото","photos"]]]));
  return;
 }
 if(u.state==="relay"){
@@ -937,7 +931,11 @@ if(a.startsWith("photo_main:")||a.startsWith("photo_remove:")){
  await change(id,{photos:updated,photo:updated[0]});
  return send(id,"⭐ Главное фото изменено.",buttons([[["🖼 Управление фото","photos"],["👤 Моя анкета","profile"]]]));
 }
-if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправьте 1–5 фотографий: по одной или альбомом. Первая станет ключевой.",buttons([[["✅ Готово","photo_done"]]]))}if(a==="photo_done"){
+if(a==="addphoto"){
+ if(Array.isArray(u.photos)&&u.photos.length>=5)return send(id,"В анкете уже пять фотографий. Чтобы добавить новую, сначала удалите одну.",buttons([[["🖼 Управление фото","photos"],["👤 Моя анкета","profile"]]]));
+ await change(id,{state:"photo"});
+ return send(id,"Отправьте 1–5 фотографий: по одной или альбомом. Первая станет ключевой.",buttons([[["✅ Готово","photo_done"]]]));
+}if(a==="photo_done"){
  await change(id,{state:""});
  const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];
  if(fresh.photo)await queueProfileRefresh(sql,id)
@@ -1058,6 +1056,16 @@ if(a.startsWith("jobpause:")){const rows=await sql("UPDATE mm_jobs SET paused=NO
  }
  if(a==="browse_roles")return chooseBrowseRole(u);
  if(a==="browse_city"){await change(id,{state:"browse_city"});return send(id,"Напишите город для каталога, например «Москва». Для сброса отправьте «все».");}
+ if(a.startsWith("profile_view:")){
+  const match=/^profile_view:(\d+):(\d{1,3})$/.exec(a);
+  const targetId=match?Number(match[1]):NaN,offset=match?Number(match[2]):NaN;
+  if(!Number.isSafeInteger(targetId)||targetId<=0||!Number.isInteger(offset)||offset<0||offset>297||offset%3!==0)
+   return send(id,"Кнопка анкеты устарела. Откройте каталог заново.",buttons([[["🔎 Каталог анкет","browse:0"],["🏠 В меню","home"]]]));
+  const target=(await sql("SELECT * FROM mm_users WHERE id=$1",targetId))[0];
+  if(!publicProfileAllowed(target,await currentDocumentHashes(),allConsentsCurrent,eligibleProfile))
+   return send(id,"Эта анкета сейчас недоступна.",buttons([[["🔎 К каталогу","browse:"+offset],["🏠 В меню","home"]]]));
+  return profile(id,target,"Анкета в каталоге","browse:"+offset);
+ }
  if(a.startsWith("browse:"))return browseProfiles(u,Math.max(0,Math.min(297,Number(a.slice(7))||0)));
  if(a==="adult_toggle"){
   if(ageAt(get(u.profile,"дата рождения"))<18||ageAt(get(u.profile,"дата рождения"))===null)return send(id,"Категория 18+ доступна только совершеннолетним.");

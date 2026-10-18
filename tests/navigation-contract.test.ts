@@ -118,3 +118,23 @@ test("saving profile, photos or search filters queues work instead of blocking c
  expect(message).not.toContain("await profileBackfill(fresh)");
  expect(message).not.toContain("await backfill(fresh)");
 });
+
+test("catalog page sends one summary and opens one currently visible profile at a time",()=>{
+ const listing=source.slice(source.indexOf("async function browseProfiles("),source.indexOf("async function chooseBrowseRole("));
+ expect(listing).toContain("renderCatalogPage(publicProfiles,offset,city,requested)");
+ expect(listing).not.toContain("await profile(");
+ expect(listing.match(/\bsend\(/g)?.length).toBe(1);
+ const callback=source.slice(source.indexOf('if(a.startsWith("profile_view:"))'),source.indexOf('if(a.startsWith("browse:"))'));
+ expect(callback).toContain("publicProfileAllowed(target");
+ expect(callback).toContain('return profile(id,target,"Анкета в каталоге","browse:"+offset)');
+});
+
+test("a sixth new photo gives a visible limit response and does not trap upload state",()=>{
+ const upload=source.slice(source.indexOf('if(m.photo?.length&&u.state==="photo")'),source.indexOf('if(u.state==="relay")'));
+ expect(upload).toContain('if(!saved.length)');
+ expect(upload).toContain('await change(id,{state:""})');
+ expect(upload).toContain('"🖼 Управление фото","photos"');
+ const callback=source.slice(source.indexOf('if(a==="addphoto")'),source.indexOf('if(a==="photo_done")'));
+ expect(callback).toContain('u.photos.length>=5');
+ expect(callback.indexOf('u.photos.length>=5')).toBeLessThan(callback.indexOf('await change(id,{state:"photo"})'));
+});
