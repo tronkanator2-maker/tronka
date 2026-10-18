@@ -1,4 +1,5 @@
 import {SQL} from "bun";
+import {parseStartTarget,parseOnboardTarget} from "./deep-links.ts";
 import {getGuide,guideMenu} from "./guides.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
@@ -552,7 +553,7 @@ async function onMessage(m){
   const existing=(await sql("SELECT consent FROM mm_users WHERE id=$1",m.from.id))[0];
   const personalControl=!!existing&&/^\/(?:mydata|deleteaccount|support|cancel|help)(?:\s|$)/.test(text);
   if(!canUseTestFeatures(Bun.env,existing?.consent)&&!personalControl)
-   return send(m.from.id,testWarning,welcomeControls());
+   return send(m.from.id,testWarning,welcomeControls(parseStartTarget(text)?.callback||"home"));
  }
  let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
  if(t==="/cancel"){const f=clearJobWizard(discardProfileDraft(u.filters));delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftToken;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
@@ -677,6 +678,22 @@ async function onCallback(c){
   a=requestedAction.startsWith("onboard:")?requestedAction.slice(8):"home";
   if(a==="home")return begin(u);
  }
+ // A shared deep link must open its intended target after first-time registration.
+ const deepTarget=parseOnboardTarget(a);
+ if(deepTarget){
+  if(deepTarget.kind==="job"){
+   const job=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",deepTarget.id))[0];
+   if(!job)return send(id,"Заявка больше не актуальна.",buttons([[["🔎 Найти другие заявки","jobs"],["🏠 В меню","home"]]]));
+   await card(id,job);
+   return send(id,"Откройте другие разделы через главное меню.",buttons([[["📢 Другие заявки","jobs"],["🏠 В меню","home"]]]));
+  }
+  const target=(await sql("SELECT * FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE AND photo IS NOT NULL",deepTarget.id))[0];
+  if(!target||!publicProfileAllowed(target,await currentDocumentHashes(),allConsentsCurrent,eligibleProfile))
+   return send(id,"Эта анкета сейчас недоступна.",buttons([[["🔎 Другие анкеты","browse:0"],["🏠 В меню","home"]]]));
+  await profile(id,target,"Анкета специалиста");
+  return send(id,"Продолжить поиск можно через каталог.",buttons([[["🔎 Каталог анкет","browse:0"],["🏠 В меню","home"]]]));
+ }
+
  if(a==="test:revoke"){
   if(!testMode())return send(id,"Эта функция сейчас недоступна.");
   const consent={...(u.consent||{}),test_access:false,test_revoked_at:new Date().toISOString()};
