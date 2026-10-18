@@ -7,7 +7,7 @@ import {prepareInvitationOutbox,queueInitialInvitation,deliverPendingInvitations
 import {parsePageOffset,pageNavigation} from "./pagination.ts";
 import {renderCatalogPage} from "./catalog-page.ts";
 import {renderJobsPage} from "./jobs-page.ts";
-import {demoPage,demoItem,demoRoute} from "./demo-catalog.ts";
+import {demoPage,demoItem,demoRoute,demoProfiles,demoJobs} from "./demo-catalog.ts";
 import {prepareProfileRefreshQueue,queueProfileRefresh,runProfileRefreshBatch} from "./profile-refresh.ts";
 import {runProfileFanoutPage} from "./profile-fanout.ts";
 import {getGuide,guideMenu} from "./guides.ts";
@@ -41,8 +41,7 @@ const menu={inline_keyboard:[
  [{text:"🎯 Фильтры",callback_data:"filters"},{text:"📌 Мои заявки",callback_data:"mine"}],
  [{text:"📬 Мои отклики",callback_data:"myresponses"},{text:"✉️ Приглашения",callback_data:"myinvites"}],
  [{text:"⏸️ Поиск вкл/выкл",callback_data:"pause"},{text:"ℹ️ Как работает",callback_data:"how"}],
- [{text:"⚙️ Ещё",callback_data:"more"}],
- [{text:"🎬 Демо: 10 анкет и заявок",callback_data:"demo:home"}]
+ [{text:"⚙️ Ещё",callback_data:"more"}]
 ]};
 const esc=s=>String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
 async function sql(q,...v){return db.unsafe(q,v)}
@@ -127,9 +126,19 @@ async function currentDocumentHashes(){
 function consentBoard(u,hashes){let c=u.consent||{};
  const ok=i=>consentIsCurrent(c,hashes,i);
  return buttons([...consentNames.map((x,i)=>[[(ok(i)?"✅ ":"☐ ")+x,"consent:"+i]]),[["📄 Документы","docs"]],...([0,1,2].every(ok)?[[["Продолжить","go"]]]:[])])}
+function registrationPreview(to){
+ const person=demoProfiles[0],job=demoJobs[0];
+ return send(to,"<b>Мир моделей</b> · примеры карточек\n\n"+
+  "👤 <b>Анкета · пример</b>\n"+esc(person.name)+" · "+esc(person.role)+" · "+person.age+" лет\n"+esc(person.city)+" · "+esc(person.special)+"\n\n"+
+  "📢 <b>Заявка · пример</b>\n"+esc(job.title)+" · "+esc(job.city)+"\nИщут: "+esc(job.who)+" · "+esc(job.pay)+"\n"+esc(job.description)+"\n\n"+
+  "Это вымышленные примеры. Реальные анкеты и заявки появятся после открытия регистрации.",buttons([
+   [["Открыть пример анкеты","demo:profile:"+person.id],["Открыть пример заявки","demo:job:"+job.id]],
+   [["📄 Документы сервиса","docs"]]
+  ]));
+}
 async function begin(u){
  if(u.blocked||u.suspended)return send(u.id,"Аккаунт ограничен. Напишите /support или используйте /mydata.");
- if(!testReady()||(!testMode()&&!(await legalReady(sql))))return send(u.id,"«Мир моделей» готовится к запуску. Пока доступно демо.",buttons([[["🎬 Демо","demo:home"]],[["📄 Документы","docs"]]]));
+ if(!testReady()||(!testMode()&&!(await legalReady(sql))))return registrationPreview(u.id);
  if(testMode()){
   const resume=u.state==="wizard"?[[{text:"▶️ Продолжить анкету",callback_data:"wizard:resume"},{text:"❌ Отменить",callback_data:"wizard:cancel"}]]:u.state==="profile_confirm"?[[{text:"✅ Сохранить черновик",callback_data:"profile_save"},{text:"✏️ Исправить",callback_data:"edit_profile"}]]:u.filters?.profileDraft?[[{text:"📝 Вернуться к черновику",callback_data:"edit_profile"},{text:"❌ Отменить",callback_data:"wizard:cancel"}]]:u.state==="job_wizard"?[[{text:"▶️ Продолжить заявку",callback_data:"jobwizard:resume"},{text:"❌ Отменить",callback_data:"jobwizard:cancel"}]]:u.state==="job_confirm"?[[{text:"✅ Опубликовать заявку",callback_data:"publish"},{text:"✏️ Исправить",callback_data:"job_template"}]]:[];
   return send(u.id,testMenuText+(resume.length?"\n\n📝 У вас есть незавершённая анкета.":""),{inline_keyboard:[...resume,...menu.inline_keyboard]});
@@ -341,7 +350,10 @@ async function browseProfiles(u,offset=0){
   if(city&&!city.split(",").some(c=>get(p.profile,"город").toLowerCase().includes(c.trim())))return false;
   return true;
  });
- const page=renderCatalogPage(publicProfiles,offset,city,requested);
+ const sampleProfiles=demoProfiles
+  .filter(p=>matchesWantedProfileRoles(requested,p.role)&&(!city||city.split(",").some(c=>p.city.toLowerCase().includes(c.trim()))))
+  .map(p=>({id:p.id,demo:true,age:p.age,profile:{"имя":p.name,"кто вы":p.role,"город":p.city}}));
+ const page=renderCatalogPage(publicProfiles,offset,city,requested,sampleProfiles);
  return send(u.id,page.text,buttons(page.rows));
 }
 async function chooseBrowseRole(u){
@@ -601,7 +613,7 @@ async function onMessage(m){
   if(text==="/help")return send(m.from.id,getGuide("getting-started").text,buttons([[["📚 Другие материалы","articles"],["✨ Начать","onboard:home"]]]));
  if(text==="/id")return send(m.from.id,"Telegram ID: <code>"+m.from.id+"</code>");
  if(text.startsWith("/start")&&(Bun.env.REGISTRATION_ENABLED!=="true"||(!testMode()&&!(await legalReady(sql))))){
-  return send(m.from.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации документов и проверки интеграций. Пока можно посмотреть демонстрацию.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));
+  return registrationPreview(m.from.id);
  }
  // Only a new account gets referral credit in the open developer flow.
  const referralStart=testMode()&&testReady()?parseReferralStart(text):null;
@@ -999,9 +1011,13 @@ if(a==="addphoto"){
    js=recent.filter(job=>!isExplicitAdultCasting([get(job.body,"описание"),get(job.body,"требования"),get(job.body,"тип работы")].join(" "))).slice(0,5);
   }
   const page=js.slice(offset,offset+5);
-  if(!page.length)return send(id,offset?"На этой странице заявок больше нет.":"Подходящих заявок пока нет. Попробуйте изменить фильтры.",buttons([[["🎯 Фильтры","filters"],["➕ Создать заявку","new"]],[["🎬 10 демо-заявок (вымышленные)","demo:jobs:0"]],[["🏠 В меню","home"]]]));
-  if(!hasProfile&&offset===0)await send(id,"🔎 <b>Предпросмотр открытых заявок</b>\nМожно посмотреть условия без готовой анкеты. Для отклика создайте профиль и добавьте главное фото.");
-  const rendered=renderJobsPage(js,offset);
+  if(!page.length&&offset>0)return send(id,"На этой странице заявок больше нет.",buttons([[['📢 К списку заявок','jobs'],['🏠 В меню','home']]]));
+  const cityFilter=(u.filters?.city||"").trim().toLowerCase();
+  const roleFilter=get(u.profile,"кто вы");
+  const sampleJobs=demoJobs
+   .filter(job=>(!cityFilter||cityFilter.split(",").some(city=>job.city.toLowerCase().includes(city.trim())))&&(!hasProfile||roleMatch(job.who,roleFilter)))
+   .slice(0,2);
+  const rendered=renderJobsPage(js,offset,sampleJobs,hasProfile);
   return send(id,rendered.text,buttons(rendered.rows));
  }
  if(a.startsWith("job_view:")){

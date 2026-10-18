@@ -15,8 +15,7 @@ const actions=Object.fromEntries([
  ["myinvites",'if(a==="myinvites")'],
  ["pause",'if(a==="pause")'],
  ["how",'if(c.data==="how")'],
- ["more",'if(a==="more")'],
- ["demo:home",'if(c.data?.startsWith("demo:"))']
+ ["more",'if(a==="more")']
 ]);
 
 test("every button in the main navigation has a corresponding action handler",()=>{
@@ -60,7 +59,7 @@ test("job and profile listings use compact bounded pages and personal listings s
  expect(callback).toContain('parsePageOffset(a,"mine")');
  expect(callback).toContain('pageNavigation("mine",offset,items.length>5)');
  expect(callback).toContain('const page=js.slice(offset,offset+5)');
- expect(source).toContain('const rendered=renderJobsPage(js,offset)');
+ expect(source).toContain('const rendered=renderJobsPage(js,offset,sampleJobs,hasProfile)');
  expect(callback).toContain('if(a.startsWith("job_view:"))');
  expect(callback).toContain('const page=items.slice(0,5)');
 });
@@ -91,8 +90,12 @@ test("accepted invitation and accepted response actions are recovered by durable
  expect(source).toContain("processInvitationOutbox()");
 });
 
-test("sample catalog button opens twenty explicitly fictional cards, no live response or invite callbacks",()=>{
- expect(source).toContain('callback_data:"demo:home"');
+test("fictional samples are available in normal search and registration preview, without a demo main-menu button",()=>{
+ expect(menuSource).not.toContain('callback_data:"demo:home"');
+ expect(source).toContain('const sampleProfiles=demoProfiles');
+ expect(source).toContain('const sampleJobs=demoJobs');
+ expect(source).toContain('"Открыть пример анкеты","demo:profile:"+person.id');
+ expect(source).toContain('"Открыть пример заявки","demo:job:"+job.id');
  expect(source).toContain('if(c.data?.startsWith("demo:"))return demoScreen');
  expect(source).toContain('demoPage(route.type,route.page)');
  expect(source).toContain('demoItem(route.type,route.id)');
@@ -131,7 +134,7 @@ test("saving profile, photos or search filters queues work instead of blocking c
 
 test("catalog page sends one summary and opens one currently visible profile at a time",()=>{
  const listing=source.slice(source.indexOf("async function browseProfiles("),source.indexOf("async function chooseBrowseRole("));
- expect(listing).toContain("renderCatalogPage(publicProfiles,offset,city,requested)");
+ expect(listing).toContain("renderCatalogPage(publicProfiles,offset,city,requested,sampleProfiles)");
  expect(listing).not.toContain("await profile(");
  expect(listing.match(/\bsend\(/g)?.length).toBe(1);
  const callback=source.slice(source.indexOf('if(a.startsWith("profile_view:"))'),source.indexOf('if(a.startsWith("browse:"))'));
