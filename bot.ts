@@ -108,7 +108,9 @@ await setupSourceHealth(sql);
 let ready;function ensure(){return ready??=(setup().catch(e=>{ready=null;throw e}))}
 async function call(method,p){const r=await fetch("https://api.telegram.org/bot"+token+"/"+method,{method:"POST",headers:{"content-type":"application/json"},signal:AbortSignal.timeout(method==="answerCallbackQuery"?3500:12000),body:JSON.stringify(p,(_,v)=>typeof v==="bigint"?Number(v):v)});const j=await r.json();if(!j.ok)console.error("Telegram",method,j.description);return j}
 const send=async(id,text,markup)=>{
+ console.log("Telegram send begin",id,process.memoryUsage().rss);
  const result=await call("sendMessage",{chat_id:id,text,parse_mode:"HTML",disable_web_page_preview:true,...markup?{reply_markup:markup}:{}});
+ console.log("Telegram send result",id,result.ok);
  if(!result.ok && (result.error_code===429||result.error_code>=500))throw Error("Telegram delivery temporarily unavailable");
  return result;
 };
@@ -139,6 +141,7 @@ function registrationPreview(to){
   ]));
 }
 async function begin(u){
+ console.log("Telegram begin",u.id,u.state,process.memoryUsage().rss);
  if(u.blocked||u.suspended)return send(u.id,"Аккаунт ограничен. Напишите /support или используйте /mydata.");
  if(!testReady()||(!testMode()&&!(await legalReady(sql))))return registrationPreview(u.id);
  if(testMode()){
@@ -603,6 +606,7 @@ async function submitResponse(u,body){
 }
 
 async function onMessage(m){
+ console.log("Telegram message begin",m.message_id,String(m.text||"").startsWith("/start"),process.memoryUsage().rss);
  if(m.chat?.type&&m.chat.type!=="private"){await onSourcePost(m);return}
  const text=String(m.text||"");
  if(text==="/examples")return demoScreen(m.from.id);
@@ -615,6 +619,7 @@ async function onMessage(m){
  const referralStart=testMode()&&testReady()?parseReferralStart(text):null;
  const firstVisit=referralStart?!(await sql("SELECT id FROM mm_users WHERE id=$1",m.from.id)).length:false;
  let u=await who(m.from);
+ console.log("Telegram user loaded",u.id,process.memoryUsage().rss);
  let id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/examples")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
  if(t==="/cancel"){const f=clearJobWizard(discardProfileDraft(u.filters));delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftToken;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
  if(t==="/help")return send(id,"ℹ️ <b>Мир моделей</b>\n/start — главное меню\n/examples — примеры анкет и заявок\n/cancel — отмена текущего действия\n/mydata — экспорт своих данных\n/deleteaccount — удалить аккаунт\n\nЛичные данные можно посмотреть или удалить через /mydata и /deleteaccount.",buttons([[["👤 Моя анкета","profile"],["ℹ️ Как работает","how"]],[["🏠 В меню","home"]]]));
@@ -1372,12 +1377,15 @@ async function processTelegramUpdateQueue(){
    if(!rows.length)break;
    const row=rows[0],started=Date.now();
    try{
+    console.log("Telegram queue claimed",row.update_id,typeof row.payload,process.memoryUsage().rss);
     // Bun may return a JSONB column as serialized JSON depending on the
     // PostgreSQL driver/runtime version. Normalize it before dispatching so
     // update_id and nested Telegram fields are available to the handler.
     const payload=typeof row.payload==="string"?JSON.parse(row.payload):row.payload;
     if(!payload||typeof payload!=="object"||!Number.isSafeInteger(payload.update_id))throw Error("Queued Telegram update payload is invalid");
+    console.log("Telegram queue parsed",row.update_id);
     await handleTelegramUpdate(payload);
+    console.log("Telegram queue handled",row.update_id);
     await sql("UPDATE mm_telegram_update_queue SET completed_at=NOW(),locked_until=NULL,payload='{}'::jsonb WHERE update_id=$1",row.update_id);
     const ms=Date.now()-started;if(ms>1800)console.warn("Telegram update processing slow",row.update_id,ms,"ms");
    }catch(e){
