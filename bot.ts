@@ -13,7 +13,7 @@ import {parseWithModel} from "./ai-parser.ts";
 import {prepareDocuments,legalReady as legalDocumentsReady,recordConsent,publicDocumentRoute,latestDocuments,documentHashes,allConsentsCurrent as fullConsentsCurrent,consentIsCurrent} from "./documents.ts";
 import {prepareEntitlements,startPhoneTrial,hasPaidAccess as activeSubscription,weekStartMoscow} from "./access.ts";
 import {setupFeedback, scheduleFeedback, feedbackTick, feedbackCallback, feedbackText, feedbackSummary} from "./feedback.ts";
-import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity, eligibleProfile, matchesCastingRequirements, isExplicitAdultCasting,matchesWantedProfileRoles} from "./engine.ts";
+import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity, eligibleProfile, matchesCastingRequirements, isExplicitAdultCasting,matchesWantedProfileRoles,incompleteProfileFields} from "./engine.ts";
 const db=new SQL(Bun.env.DATABASE_URL||"postgres://unconfigured");
 const token=Bun.env.BOT_TOKEN||"", secret=Bun.env.WEBHOOK_SECRET||"";
 const admin=(Bun.env.ADMIN_IDS||"").split(",");
@@ -803,10 +803,12 @@ if(a==="template_model"||a==="template_client"){
  const savedFilters=discardProfileDraft(u.filters);delete savedFilters.wizardSelected;
  await change(id,{profile:draft,filters:savedFilters,state:"",photos,photo:photos[0]||u.photo||null});
  const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];
- if(fresh.photo){await profileBackfill(fresh);await backfill(fresh);
-  return send(id,"✅ Анкета сохранена! Фото есть, профиль готов к подбору.",buttons([[["👤 Моя анкета","profile"],["🏠 В меню","home"]]]));
+ const gaps=incompleteProfileFields(fresh.profile,fresh.photo);
+ if(fresh.photo){await profileBackfill(fresh);await backfill(fresh);}
+ if(gaps.length){
+  return send(id,"✅ Анкета сохранена, но пока не участвует в подборе.\n\nДля публикации осталось: "+esc(gaps.slice(0,9).join(", ")),buttons([[["✏️ Дополнить анкету","edit_profile"],["📷 Фото","addphoto"]],[["🏠 В меню","home"]]]));
  }
- return send(id,"✅ Анкета сохранена. Чтобы участвовать в подборе, добавьте главное фото.",buttons([[["📷 Добавить фото","addphoto"],["🏠 Позже","home"]]]));
+ return send(id,"✅ Анкета готова к подбору и участвует в поиске. Можете настроить фильтры.",buttons([[["🎯 Фильтры","filters"],["👤 Моя анкета","profile"]],[["🏠 В меню","home"]]]));
 }
 if(a==="photos"){
  const photos=Array.isArray(u.photos)?u.photos:[],rows=[];
