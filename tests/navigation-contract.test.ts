@@ -53,6 +53,7 @@ test("user-facing sample pages use clear fictional-example labels and no demo br
  expect(exampleMenu).not.toMatch(/демо/i);
  expect(source).toContain('{command:"examples",description:"Примеры анкет и заявок"}');
  expect(source).not.toContain('{command:"demo"');
+ expect(source).not.toContain('"/demo"');
 });
 
 test("Home action is handled before consent gating and clears stale text-input modes",()=>{

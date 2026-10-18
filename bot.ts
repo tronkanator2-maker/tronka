@@ -609,7 +609,7 @@ async function submitResponse(u,body){
 async function onMessage(m){
  if(m.chat?.type&&m.chat.type!=="private"){await onSourcePost(m);return}
  const text=String(m.text||"");
- if(text==="/examples"||text==="/demo")return demoScreen(m.from.id);
+ if(text==="/examples")return demoScreen(m.from.id);
   if(text==="/help")return send(m.from.id,getGuide("getting-started").text,buttons([[["📚 Другие материалы","articles"],["✨ Начать","onboard:home"]]]));
  if(text==="/id")return send(m.from.id,"Telegram ID: <code>"+m.from.id+"</code>");
  if(text.startsWith("/start")&&(Bun.env.REGISTRATION_ENABLED!=="true"||(!testMode()&&!(await legalReady(sql))))){
@@ -619,7 +619,7 @@ async function onMessage(m){
  const referralStart=testMode()&&testReady()?parseReferralStart(text):null;
  const firstVisit=referralStart?!(await sql("SELECT id FROM mm_users WHERE id=$1",m.from.id)).length:false;
  let u=await who(m.from);
- let id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/examples"||t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
+ let id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/examples")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
  if(t==="/cancel"){const f=clearJobWizard(discardProfileDraft(u.filters));delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftToken;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
  if(t==="/help")return send(id,"ℹ️ <b>Мир моделей</b>\n/start — главное меню\n/examples — примеры анкет и заявок\n/cancel — отмена текущего действия\n/mydata — экспорт своих данных\n/deleteaccount — удалить аккаунт\n\nЛичные данные можно посмотреть или удалить через /mydata и /deleteaccount.",buttons([[["👤 Моя анкета","profile"],["ℹ️ Как работает","how"]],[["🏠 В меню","home"]]]));
  if(t==="/teststatus"&&admin.includes(String(id)))return send(id,testMode()?"🧪 Тестовый режим активен. Регистрация открыта: "+(testReady()?"да":"нет")+"\nПлатежи отключены.\nТелефон не требуется.":"Тестовый режим выключен.");if(t==="/mydata"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Данных нет.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Не получилось отправить архив. Попробуйте позже.");return;}
