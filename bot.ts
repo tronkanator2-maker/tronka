@@ -58,6 +58,8 @@ await sql("CREATE TABLE IF NOT EXISTS mm_reports(id BIGSERIAL PRIMARY KEY,user_i
 await sql("CREATE TABLE IF NOT EXISTS mm_updates(id BIGINT PRIMARY KEY)");
 await sql("ALTER TABLE mm_updates ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()");
 await sql("CREATE INDEX IF NOT EXISTS mm_update_age ON mm_updates(created_at)");
+await sql("CREATE TABLE IF NOT EXISTS mm_telegram_update_queue(update_id BIGINT PRIMARY KEY,payload JSONB NOT NULL,received_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),locked_until TIMESTAMPTZ,completed_at TIMESTAMPTZ)");
+await sql("CREATE INDEX IF NOT EXISTS mm_telegram_update_queue_ready ON mm_telegram_update_queue(next_attempt_at,received_at) WHERE completed_at IS NULL");
 await sql("CREATE TABLE IF NOT EXISTS mm_sources(id BIGINT PRIMARY KEY,title TEXT DEFAULT '',city TEXT DEFAULT '',topic TEXT DEFAULT '',active BOOLEAN DEFAULT TRUE,created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("CREATE TABLE IF NOT EXISTS mm_source_posts(source_id BIGINT NOT NULL,telegram_message_id BIGINT NOT NULL,job_id BIGINT,moderation TEXT NOT NULL,reason TEXT,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(source_id,telegram_message_id))");
 await sql("CREATE TABLE IF NOT EXISTS mm_source_blacklist(source_id BIGINT NOT NULL,contact TEXT NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(source_id,contact))");
@@ -1337,6 +1339,50 @@ async function saveReport(u,txt,photo=null){
 }
 
 let initialInvitationWorkerRunning=false;
+let telegramUpdateWorkerRunning=false;
+async function handleTelegramUpdate(x){
+ const completed=await sql("SELECT id FROM mm_updates WHERE id=$1",x.update_id);
+ if(completed.length)return;
+ if(x.callback_query?.id){try{await call("answerCallbackQuery",{callback_query_id:x.callback_query.id})}catch(e){console.warn("Callback acknowledgment failed",String(e))}}
+ if(x.message?.from||x.message?.chat?.type!=="private")if(x.message)await onMessage(x.message);
+ if(x.channel_post)await onSourcePost(x.channel_post);
+ if(x.callback_query?.from){
+  try{await onCallback(x.callback_query)}catch(e){
+   console.error("Callback action failed",JSON.stringify({updateId:x.update_id,userId:x.callback_query.from.id,action:x.callback_query.data,error:String(e),stack:e?.stack||""}));
+   try{await send(x.callback_query.from.id,"Действие не завершилось из-за временной ошибки. Попробуйте ещё раз или отправьте /start.",buttons([[ ["🏠 Главное меню","home"],["❓ Поддержка","support"] ]]));}
+   catch(notifyError){console.error("Callback error notice failed",String(notifyError))}
+  }
+ }
+ await sql("INSERT INTO mm_updates(id) VALUES($1) ON CONFLICT DO NOTHING",x.update_id);
+}
+async function processTelegramUpdateQueue(){
+ if(telegramUpdateWorkerRunning)return;
+ telegramUpdateWorkerRunning=true;
+ try{
+  await ensure();
+  for(let i=0;i<5;i++){
+   const rows=await sql(`WITH candidate AS (
+    SELECT update_id FROM mm_telegram_update_queue
+    WHERE completed_at IS NULL AND next_attempt_at<=NOW() AND (locked_until IS NULL OR locked_until<NOW())
+    ORDER BY received_at LIMIT 1 FOR UPDATE SKIP LOCKED
+   )
+   UPDATE mm_telegram_update_queue q SET locked_until=NOW()+INTERVAL '30 seconds',attempts=q.attempts+1
+   FROM candidate WHERE q.update_id=candidate.update_id
+   RETURNING q.update_id,q.payload,q.attempts`);
+   if(!rows.length)break;
+   const row=rows[0],started=Date.now();
+   try{
+    await handleTelegramUpdate(row.payload);
+    await sql("UPDATE mm_telegram_update_queue SET completed_at=NOW(),locked_until=NULL,payload='{}'::jsonb WHERE update_id=$1",row.update_id);
+    const ms=Date.now()-started;if(ms>1800)console.warn("Telegram update processing slow",row.update_id,ms,"ms");
+   }catch(e){
+    const retrySeconds=Math.min(300,2**Math.min(Number(row.attempts)||1,8));
+    await sql("UPDATE mm_telegram_update_queue SET locked_until=NULL,next_attempt_at=NOW()+($2::int*INTERVAL '1 second') WHERE update_id=$1",row.update_id,retrySeconds);
+    console.error("Queued Telegram update failed",JSON.stringify({updateId:row.update_id,attempt:row.attempts,retrySeconds,error:String(e),stack:e?.stack||""}));
+   }
+  }
+ }finally{telegramUpdateWorkerRunning=false}
+}
 async function processInvitationOutbox(){
  if(initialInvitationWorkerRunning)return;
  initialInvitationWorkerRunning=true;
@@ -1371,28 +1417,13 @@ Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){
  if(u.pathname==="/health"){try{await ensure();return Response.json({ok:true,registration:Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql),test_mode:testMode(),legal_documents_approved:await legalDocumentsReady(sql),schema:"ready"})}catch(e){console.error("Health check failed:",String(e));return new Response("Database unavailable",{status:503})}}
  if(u.pathname==="/webhook"&&r.method==="POST"){
   if(!secret||r.headers.get("x-telegram-bot-api-secret-token")!==secret)return new Response("Forbidden",{status:403});
-  const started=Date.now();let updateId;
   try{
-   const x=await r.json();updateId=x?.update_id;
-   if(x.callback_query?.id){try{await call("answerCallbackQuery",{callback_query_id:x.callback_query.id})}catch(e){console.warn("Callback acknowledgment failed",String(e))}}
+   const x=await r.json();
+   if(!Number.isSafeInteger(x?.update_id)||x.update_id<0)return new Response("Invalid update",{status:400});
    await ensure();
-   let ok=await sql("INSERT INTO mm_updates(id) VALUES($1) ON CONFLICT DO NOTHING RETURNING id",x.update_id);
-   if(ok.length){
-    try{
-     if(x.message?.from||x.message?.chat?.type!=="private")if(x.message)await onMessage(x.message);
-     if(x.channel_post)await onSourcePost(x.channel_post);
-     if(x.callback_query?.from){
-      try{await onCallback(x.callback_query)}catch(e){
-       console.error("Callback action failed",JSON.stringify({updateId:x.update_id,userId:x.callback_query.from.id,action:x.callback_query.data,error:String(e),stack:e?.stack||""}));
-       try{await send(x.callback_query.from.id,"Действие не завершилось из-за временной ошибки. Попробуйте ещё раз или отправьте /start.",buttons([[ ["🏠 Главное меню","home"],["❓ Поддержка","support"] ]]));}
-       catch(notifyError){console.error("Callback error notice failed",String(notifyError))}
-      }
-     }
-    }catch(e){await sql("DELETE FROM mm_updates WHERE id=$1",x.update_id);throw e}
-   }
+   await sql("INSERT INTO mm_telegram_update_queue(update_id,payload) VALUES($1,$2::jsonb) ON CONFLICT(update_id) DO NOTHING",x.update_id,JSON.stringify(x));
    return new Response("ok")
-  }catch(e){console.error("Update error",String(e));if(updateId!==undefined){try{await sql("DELETE FROM mm_updates WHERE id=$1",updateId)}catch(cleanupError){console.error("Update cleanup failed",String(cleanupError))}}return new Response("error",{status:500})}
-  finally{const ms=Date.now()-started;if(ms>1800)console.warn("Slow Telegram webhook:",ms,"ms")}
+  }catch(e){console.error("Webhook enqueue failed",String(e));return new Response("error",{status:503,headers:{"retry-after":"1"}})}
  }
  try{await ensure()}catch(e){console.error("Database not ready:",String(e));return new Response("Service temporarily unavailable",{status:503,headers:{"cache-control":"no-store"}})}
  const documents=await publicDocumentRoute(r,sql);if(documents)return documents;
@@ -1413,9 +1444,11 @@ setInterval(()=>processAcceptedInvitationOutbox().catch(e=>console.error("accept
 setInterval(()=>processInvitationOutbox().catch(e=>console.error("initial invitation outbox tick",String(e))),5000);
 setInterval(()=>processProfileRefresh().catch(e=>console.error("profile refresh tick",String(e))),7500);
 setInterval(()=>consumeCollectorInbox().catch(e=>console.error("collector inbox",String(e))),5000);
+setInterval(()=>processTelegramUpdateQueue().catch(e=>console.error("telegram update queue",String(e))),1000);
 setInterval(()=>ensure().then(()=>reviewSourceHealth(sql)).catch(e=>console.error("source health",String(e))),24*60*60*1000);
 setInterval(()=>ensure().then(async()=>{
  await sql("DELETE FROM mm_updates WHERE created_at<NOW()-INTERVAL '30 days'");
+ await sql("DELETE FROM mm_telegram_update_queue WHERE completed_at<NOW()-INTERVAL '30 days'");
  await sql("DELETE FROM mm_relay_usage WHERE hour_bucket<NOW()-INTERVAL '72 hours'");
  await sql("DELETE FROM mm_fanout_queue WHERE pending=FALSE AND completed_at<NOW()-INTERVAL '90 days'");
  }).catch(e=>console.error("maintenance",String(e))),24*60*60*1000);
@@ -1424,6 +1457,7 @@ setTimeout(()=>processAcceptedResponseOutbox().catch(e=>console.error("accepted 
 setTimeout(()=>processAcceptedInvitationOutbox().catch(e=>console.error("accepted invitation startup",String(e))),7500);
 setTimeout(()=>processInvitationOutbox().catch(e=>console.error("initial invitation startup",String(e))),8000);
 setTimeout(()=>processProfileRefresh().catch(e=>console.error("profile refresh startup",String(e))),8500);
+setTimeout(()=>processTelegramUpdateQueue().catch(e=>console.error("telegram update startup",String(e))),1500);
 if(token&&secret&&Bun.env.PUBLIC_URL)(async()=>{
  const me=await call("getMe",{});
  if(!me.ok){console.error("Telegram token failed getMe validation");return}

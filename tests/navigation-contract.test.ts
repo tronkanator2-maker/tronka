@@ -37,13 +37,19 @@ test("developer startup no longer draws or persists checkbox agreement",()=>{
 test("unknown old inline keyboards receive visible feedback",()=>{
  expect(source).toContain("Эта кнопка больше не действует.");
 });
-test("Telegram callbacks are acknowledged before database initialization and failures are shown to the user",()=>{
- const fetcher=source.slice(source.indexOf("Bun.serve({"),source.indexOf("setInterval("));
- const webhook=fetcher.slice(fetcher.indexOf('if(u.pathname==="/webhook"'),fetcher.indexOf("try{await ensure()}catch"));
- expect(webhook.indexOf('await call("answerCallbackQuery"')).toBeGreaterThan(-1);
- expect(webhook.indexOf('await call("answerCallbackQuery"')).toBeLessThan(webhook.indexOf("await ensure()"));
- expect(webhook).toContain('console.error("Callback action failed"');
- expect(webhook).toContain("Действие не завершилось из-за временной ошибки.");
+test("Telegram webhook durably queues messages and retries processing after failures",()=>{
+ const webhook=source.slice(source.indexOf('if(u.pathname==="/webhook"'),source.indexOf("try{await ensure()}catch"));
+ const worker=source.slice(source.indexOf("async function handleTelegramUpdate("),source.indexOf("async function processInvitationOutbox()"));
+ expect(webhook).toContain("INSERT INTO mm_telegram_update_queue");
+ expect(webhook).toContain('return new Response("ok")');
+ expect(webhook).not.toContain('INSERT INTO mm_updates(id)');
+ expect(worker).toContain("FOR UPDATE SKIP LOCKED");
+ expect(worker).toContain('await call("answerCallbackQuery"');
+ expect(worker).toContain("INSERT INTO mm_updates(id)");
+ expect(worker).toContain("Queued Telegram update failed");
+ expect(worker).toContain("next_attempt_at=NOW()");
+ expect(worker).toContain('console.error("Callback action failed"');
+ expect(worker).toContain("Действие не завершилось из-за временной ошибки.");
 });
 test("user-facing sample pages use clear fictional-example labels and no demo branding",()=>{
  const exampleMenu=source.slice(source.indexOf("function demoMenu()"),source.indexOf("let profileRefreshWorkerRunning"));
