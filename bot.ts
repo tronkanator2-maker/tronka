@@ -1097,7 +1097,10 @@ if(a.startsWith("declineresponse:")){
  try{await send(rows[0].user_id,"К сожалению, ваш отклик №"+rId+" отклонён. Другие заявки можно найти в главном меню.")}catch(e){console.error("Declined response notification",String(e))}
  return send(id,"Отклик отклонён, участнику отправлено уведомление.");
 }
-if(a.startsWith("reportjob:")||a.startsWith("reportuser:")||a==="report"||a==="support"){const f={...(u.filters||{})};f.reportTarget=a.startsWith("reportjob:")?{job:Number(a.slice(10))}:a.startsWith("reportuser:")?{user:Number(a.slice(11))}:{};await change(id,{state:"support",filters:f});return send(id,"Опишите причину своими словами. Можно приложить скриншот.")}}
+if(a.startsWith("reportjob:")||a.startsWith("reportuser:")||a==="report"||a==="support"){const f={...(u.filters||{})};f.reportTarget=a.startsWith("reportjob:")?{job:Number(a.slice(10))}:a.startsWith("reportuser:")?{user:Number(a.slice(11))}:{};await change(id,{state:"support",filters:f});return send(id,"Опишите причину своими словами. Можно приложить скриншот.")}
+ // Old or malformed inline keyboards must always give feedback instead of doing nothing.
+ return send(id,"Эта кнопка больше не действует. Откройте нужный раздел через меню.",buttons([[["🏠 Главное меню","home"],["❓ Поддержка","support"]]]));
+}
 
 function sourceJobDisplayText(raw){return sourcePublicText(raw).replace(/https?:\/\/\S+|www\.\S+/gi,"[ссылка скрыта]");}
 function sourcePublicText(raw){return redactContacts(raw)}
@@ -1249,14 +1252,14 @@ Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){
  if(!sent.ok)throw Error("Telegram не доставил ответ.");
  await sql("INSERT INTO mm_support_messages(ticket_id,sender,body) VALUES($1,'support',$2)",id,message);
  await sql("UPDATE mm_reports_v2 SET status='in_progress',updated_at=NOW() WHERE id=$1",id);
-});if(dashboard)return dashboard;let u=new URL(r.url);if(u.pathname==="/health"){try{await ensure();return Response.json({ok:true,registration:Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql),test_mode:testMode(),legal_documents_approved:await legalDocumentsReady(sql),schema:"ready"})}catch(e){return new Response("Database unavailable",{status:503})}}if(u.pathname==="/webhook"&&r.method==="POST"){if(!secret||r.headers.get("x-telegram-bot-api-secret-token")!==secret)return new Response("Forbidden",{status:403});try{await ensure();let x=await r.json();let ok=await sql("INSERT INTO mm_updates(id) VALUES($1) ON CONFLICT DO NOTHING RETURNING id",x.update_id);if(ok.length){
+});if(dashboard)return dashboard;let u=new URL(r.url);if(u.pathname==="/health"){try{await ensure();return Response.json({ok:true,registration:Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql),test_mode:testMode(),legal_documents_approved:await legalDocumentsReady(sql),schema:"ready"})}catch(e){return new Response("Database unavailable",{status:503})}}if(u.pathname==="/webhook"&&r.method==="POST"){if(!secret||r.headers.get("x-telegram-bot-api-secret-token")!==secret)return new Response("Forbidden",{status:403});const started=Date.now();try{await ensure();let x=await r.json();let ok=await sql("INSERT INTO mm_updates(id) VALUES($1) ON CONFLICT DO NOTHING RETURNING id",x.update_id);if(ok.length){
   try {
     if(x.message?.from||x.message?.chat?.type!=="private")if(x.message)await onMessage(x.message);
     if(x.channel_post)await onSourcePost(x.channel_post);
     if(x.callback_query?.from)await onCallback(x.callback_query);
   }catch(e){await sql("DELETE FROM mm_updates WHERE id=$1",x.update_id);throw e}
  }
- return new Response("ok")}catch(e){console.error("Update error",e);return new Response("error",{status:500})}}return new Response("World Models Bot")}})
+ return new Response("ok")}catch(e){console.error("Update error",String(e));return new Response("error",{status:500})}finally{const ms=Date.now()-started;if(ms>1800)console.warn("Slow Telegram webhook:",ms,"ms");}}return new Response("World Models Bot")}})
 setInterval(()=>ensure().then(()=>feedbackTick(sql,send)).catch(e=>console.error("feedback job",String(e))),60*60*1000);
 setInterval(()=>runFanoutBatch().catch(e=>console.error("fanout tick",String(e))),5000);
 setInterval(()=>processResponseOutbox().catch(e=>console.error("response outbox tick",String(e))),5000);
