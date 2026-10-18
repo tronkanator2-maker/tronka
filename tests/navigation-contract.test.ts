@@ -104,3 +104,17 @@ test("new editor accepts pasted template before choosing a role and provides wor
  expect(editor).toContain('"home"');
  expect(source).toContain('if(u.state==="profile"){');
 });
+
+test("saving profile, photos or search filters queues work instead of blocking callbacks with fanout",()=>{
+ const callback=source.slice(source.indexOf("async function onCallback(c){"));
+ const message=source.slice(source.indexOf("async function onMessage(m){"),source.indexOf("async function onCallback(c){"));
+ expect(source).toContain("await prepareProfileRefreshQueue(sql)");
+ expect(source).toContain("runProfileRefreshBatch(sql,sendMatchedProfile,deliverTo");
+ expect(source).toContain("processProfileRefresh()");
+ expect(callback).toContain("if(fresh.photo)await queueProfileRefresh(sql,id)");
+ expect(message).toContain("await queueProfileRefresh(sql,id)");
+ expect(callback).not.toContain("await profileBackfill(fresh)");
+ expect(callback).not.toContain("await backfill(fresh)");
+ expect(message).not.toContain("await profileBackfill(fresh)");
+ expect(message).not.toContain("await backfill(fresh)");
+});
