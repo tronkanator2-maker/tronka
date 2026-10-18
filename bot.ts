@@ -5,6 +5,7 @@ import {prepareAcceptedResponseOutbox,acceptResponseForOwner,deliverAcceptedResp
 import {prepareAcceptedInvitationOutbox,acceptInvitationForRecipient,deliverAcceptedInvitations} from "./invite-acceptance.ts";
 import {prepareInvitationOutbox,queueInitialInvitation,deliverPendingInvitations} from "./invitation-delivery.ts";
 import {parsePageOffset,pageNavigation} from "./pagination.ts";
+import {demoPage,demoItem,demoRoute} from "./demo-catalog.ts";
 import {getGuide,guideMenu} from "./guides.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
@@ -36,7 +37,8 @@ const menu={inline_keyboard:[
  [{text:"🎯 Фильтры",callback_data:"filters"},{text:"📌 Мои заявки",callback_data:"mine"}],
  [{text:"📬 Мои отклики",callback_data:"myresponses"},{text:"✉️ Приглашения",callback_data:"myinvites"}],
  [{text:"⏸️ Поиск вкл/выкл",callback_data:"pause"},{text:"ℹ️ Как работает",callback_data:"how"}],
- [{text:"⚙️ Ещё",callback_data:"more"}]
+ [{text:"⚙️ Ещё",callback_data:"more"}],
+ [{text:"🎬 Демо: 10 анкет и заявок",callback_data:"demo:home"}]
 ]};
 const esc=s=>String(s??"").replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
 async function sql(q,...v){return db.unsafe(q,v)}
@@ -370,17 +372,53 @@ async function backfill(u){const jobs=await sql("SELECT * FROM mm_jobs WHERE sta
 
 
 function demoMenu(){
- return buttons([[["👤 Пример анкеты","demo:profile"],["📢 Пример заявки","demo:job"]],[["🎯 Фильтры","demo:filters"],["🔎 Поиск анкет","demo:catalog"]],[["🏠 В начало","demo:home"]]]);
+ return buttons([
+  [["👤 Демо-анкеты (10)","demo:profiles:0"],["📢 Демо-заявки (10)","demo:jobs:0"]],
+  [["🎯 Фильтры","demo:filters"],["💌 Пример отклика","demo:response"]],
+  [["✉️ Пример приглашения","demo:invite"]],
+  [["🏠 В главное меню","home"]]
+ ]);
 }
 async function demoScreen(id,screen="home"){
- if(screen==="profile")return send(id,"🎬 <b>ДЕМО · Анкета</b>\n\nИмя: Анна\nНаправление: модель\nВозраст: 24 года\nГород: Москва\nРост: 172 см\nФормат: коммерция, ТФП\nПрайс: 3 000 ₽/час\nПортфолио: прикрепляется пользователем\n\nКонтакты скрыты до взаимодействия.",demoMenu());
- if(screen==="job")return send(id,"🎬 <b>ДЕМО · Заявка</b>\n\nСъёмка каталога одежды\nКого ищу: модель\nГород: Москва\nОплата: 5 000 ₽ за смену\nДата: по согласованию\nОписание: коммерческая съёмка, 4 часа.\n\nКнопки отклика заработают после открытия регистрации.",demoMenu());
- if(screen==="filters")return send(id,"🎬 <b>ДЕМО · Фильтры</b>\n\nГорода: Москва, Санкт-Петербург\nТип работы: реклама, кино\nФормат: коммерция / ТФП\nЧьи анкеты получать: фотографы, визажисты\n18+: выключено по умолчанию.\n\nЭто демонстрационные данные, реальные фильтры не меняются.",demoMenu());
- if(screen==="catalog")return send(id,"🎬 <b>ДЕМО · Каталог</b>\n\nАнкеты доступны по городу и профессии. Ключевое фото и обязательные поля проверяются до публикации. Контакты открываются только после приглашения.\n\nСейчас реальные данные пользователей не показываются.",demoMenu());
- return send(id,"🎬 <b>Демо «Мир моделей»</b>\nМожно посмотреть основные экраны без регистрации. Данные и фотографии вымышленные, реальные заявки не отправляются.",demoMenu());
+ const route=demoRoute(screen);
+ if(!route)return send(id,"Демо-раздел не найден.",demoMenu());
+ if(route.kind==="list"){
+  const page=demoPage(route.type,route.page);
+  if(!page)return send(id,"Страница демо не найдена.",demoMenu());
+  const label=route.type==="profiles"?"АНКЕТЫ":"ЗАЯВКИ";
+  const entries=page.items.map(item=>[
+   ["🔎 "+(route.type==="profiles"?item.name+" · "+item.role:item.title),"demo:"+(route.type==="profiles"?"profile":"job")+":"+item.id]
+  ]);
+  const paging=[];
+  if(route.page>0)paging.push(["◀️ Назад","demo:"+route.type+":"+(route.page-1)]);
+  if(route.page+1<page.pages)paging.push(["Дальше ▶️","demo:"+route.type+":"+(route.page+1)]);
+  const rows=[...entries,...(paging.length?[paging]:[]),
+   [["👤 Демо-анкеты","demo:profiles:0"],["📢 Демо-заявки","demo:jobs:0"]],
+   [["🎬 Демо-меню","demo:home"],["🏠 Главное","home"]]];
+  return send(id,"🎬 <b>ДЕМО · "+label+"</b>\n"+
+   "Показано "+page.items.length+" из "+page.total+" · страница "+(page.page+1)+"/"+page.pages+
+   "\n\nВсе имена, заказы и условия вымышлены. Это не реальные участники или вакансии; отклики и приглашения отключены.",buttons(rows));
+ }
+ if(route.kind==="detail"){
+  const item=demoItem(route.type,route.id);
+  if(!item)return send(id,"Такая демо-карточка не найдена.",demoMenu());
+  const isProfile=route.type==="profiles";
+  const rows=[],nav=[];
+  if(item.id>1)nav.push(["◀️ Предыдущая","demo:"+(isProfile?"profile":"job")+":"+(item.id-1)]);
+  if(item.id<10)nav.push(["Следующая ▶️","demo:"+(isProfile?"profile":"job")+":"+(item.id+1)]);
+  if(nav.length)rows.push(nav);
+  rows.push([[isProfile?"👥 Все 10 демо-анкет":"📢 Все 10 демо-заявок","demo:"+route.type+":"+Math.floor((item.id-1)/4)]]);
+  rows.push([["🎬 Демо-меню","demo:home"],["🏠 Главное","home"]]);
+  const body=isProfile
+   ?"👤 <b>ДЕМО-АНКЕТА №"+item.id+"</b>\n\nИмя: "+esc(item.name)+"\nПрофессия: "+esc(item.role)+"\nВозраст: "+item.age+"\nГород: "+esc(item.city)+"\nНаправление: "+esc(item.special)+"\nФормат: "+esc(item.format)+"\nО себе: "+esc(item.about)
+   :"📢 <b>ДЕМО-ЗАЯВКА №"+item.id+"</b>\n\nПроект: "+esc(item.title)+"\nГород: "+esc(item.city)+"\nКого ищут: "+esc(item.who)+"\nУсловная оплата: "+esc(item.pay)+"\nДата: "+esc(item.date)+"\nОписание: "+esc(item.description);
+  return send(id,body+"\n\n🎬 <i>Вымышленный пример. Связаться, откликнуться или пригласить этого персонажа нельзя.</i>",buttons(rows));
+ }
+ if(route.kind==="filters")return send(id,"🎬 <b>ДЕМО · Фильтры</b>\n\nПо профессии, городу и формату можно искать реальные анкеты после создания своего профиля. Эти 10 демо-анкет остаются отдельными и не участвуют в живом подборе.",demoMenu());
+ if(route.kind==="response")return send(id,"🎬 <b>ДЕМО · Отклик</b>\n\n1. Вы находите реальную заявку.\n2. Заполняете анкету и загружаете фото.\n3. Нажимаете «Откликнуться» и отправляете текст.\n4. После принятия получаете возможность переписываться.\n\nДемо-заявкам нельзя отправлять реальные отклики.",demoMenu());
+ if(route.kind==="invite")return send(id,"🎬 <b>ДЕМО · Приглашение</b>\n\n1. Выбираете реального участника из каталога.\n2. Отправляете приглашение.\n3. После его согласия становятся доступны кнопки связи.\n\nВымышленным персонажам приглашения не отправляются.",demoMenu());
+ return send(id,"🎬 <b>Демо «Мир моделей»</b>\n\n10 вымышленных анкет и 10 демонстрационных заявок, а также примеры поиска, откликов и приглашений.\n\nЭто безопасный просмотр: данные не публикуются, реальные уведомления никому не отправляются.",demoMenu());
 }
-
-
 
 let responseWorkerRunning=false;
 async function processResponseOutbox(){
