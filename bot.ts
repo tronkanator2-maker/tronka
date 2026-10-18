@@ -104,7 +104,11 @@ const testConsentBoard=u=>{
  const c=u?.consent||{};
  const target=safeRegistrationTarget(u?.filters?.pendingStartTarget);
  const next=target?"onboard:"+target:"test:agree";
- return buttons([...["Условия участия","Обработка введённых данных","Публикация анкеты"].map((label,i)=>[[(c["test_check_"+i]===true?"✅ ":"☐ ")+label,"test:consent:"+i]]),[["📖 Описание пунктов","test:docs"]],...(testConsentComplete(c)?[[["✨ Продолжить",next]]:[])]);
+ const rows=["Условия участия","Обработка введённых данных","Публикация анкеты"]
+  .map((label,i)=>[[(c["test_check_"+i]===true?"✅ ":"☐ ")+label,"test:consent:"+i]]);
+ rows.push([["📖 Описание пунктов","test:docs"]]);
+ if(testConsentComplete(c))rows.push([["✨ Продолжить",next]]);
+ return buttons(rows);
 };
 const testConsentDetails="Перед началом:\n\n1. Участие добровольное, с 18 лет.\n2. Сервис сохраняет введённые данные для работы анкет и заявок. Не указывайте конфиденциальные сведения и реальные документы.\n3. После публикации анкету смогут увидеть другие участники.\n\nОтозвать разрешение и удалить сведения можно в разделе «Личные данные». Эти пояснения не заменяют утверждённые юридические документы.";
 let cachedDocHashes=null,cachedDocHashesUntil=0;
