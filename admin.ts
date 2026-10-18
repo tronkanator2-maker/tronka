@@ -1,6 +1,6 @@
 import {publishDocument,legalReady,latestDocuments} from "./documents.ts";
 import {inferCity} from "./engine.ts";
-// Minimal secured operational dashboard. Disabled until both ADMIN_PASSWORD and ADMIN_TOTP_SECRET are configured.
+// Minimal secured operational dashboard. Disabled until ADMIN_PASSWORD is configured.
 // Session tokens are only kept in memory; no user data is exposed to unauthenticated requests.
 const sessions = new Map();
 const attempts = new Map();
@@ -10,32 +10,6 @@ function equal(a,b){
   let diff=aa.length^bb.length;
   for(let i=0;i<Math.max(aa.length,bb.length);i++)diff|=(aa[i]||0)^(bb[i]||0);
   return diff===0;
-}
-function decodeBase32(input){
- const chars="ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
- let acc=0,bits=0,result=[];
- for(const c of String(input||"").toUpperCase().replace(/[\s=-]/g,"")){
-  const n=chars.indexOf(c);if(n<0)return null;
-  acc=(acc<<5)|n;bits+=5;
-  if(bits>=8){bits-=8;result.push((acc>>bits)&255)}
- }
- return result.length?new Uint8Array(result):null;
-}
-async function totp(secret,step){
- const bytes=decodeBase32(secret);if(!bytes)return null;
- const key=await crypto.subtle.importKey("raw",bytes,{name:"HMAC",hash:"SHA-1"},false,["sign"]);
- const counter=BigInt(step), input=new Uint8Array(8);
- for(let i=7;i>=0;i--)input[i]=Number((counter>>BigInt((7-i)*8))&255n);
- const hash=new Uint8Array(await crypto.subtle.sign("HMAC",key,input));
- const idx=hash[hash.length-1]&15;
- const n=(((hash[idx]&127)<<24)|(hash[idx+1]<<16)|(hash[idx+2]<<8)|hash[idx+3])%1000000;
- return String(n).padStart(6,"0");
-}
-async function otpValid(secret,code){
- if(!/^\d{6}$/.test(String(code||"")))return false;
- const step=Math.floor(Date.now()/30000);
- for(let delta=-1;delta<=1;delta++)if(equal(await totp(secret,step+delta),code))return true;
- return false;
 }
 function sessionFrom(req){
  const found=(req.headers.get("cookie")||"").match(/(?:^|;\s*)mm_admin=([a-f0-9]{64})(?:;|$)/);
@@ -51,7 +25,7 @@ const appHtml = [
  '<style>body{font-family:system-ui;background:#0e1523;color:#eef3ff;margin:0;padding:32px}main{max-width:1100px;margin:auto}header{display:flex;justify-content:space-between;align-items:center}h1{margin:0 0 12px}p{color:#a8b5ce}.panel{background:#192436;border:1px solid #304057;border-radius:14px;padding:22px;margin:16px 0}input,button,select,textarea{background:#25344c;border:1px solid #526680;color:#fff;border-radius:8px;padding:11px;margin:5px;font:inherit}button{cursor:pointer}button:hover{background:#375072}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 monospace}code{color:#8abaff}.small{font-size:13px;color:#a8b5ce}#msg{color:#ffd292}</style>',
  '</head><body><main><header><h1>🎬 Мир моделей</h1><span class="small">Панель управления</span></header>',
  '<p>Модерация · пользователи · заявки · источники · обращения</p>',
- '<section class="panel" id="login"><h2>Вход</h2><form id="form"><input name="password" placeholder="Пароль" type="password" required><input name="otp" placeholder="Код 2FA" inputmode="numeric" maxlength="6" required><button>Войти</button></form></section>',
+ '<section class="panel" id="login"><h2>Вход</h2><form id="form"><input name="password" placeholder="Пароль" type="password" autocomplete="current-password" required><button>Войти</button></form></section>',
  '<section id="dashboard" style="display:none"><div class="panel"><button data-op="refresh">Обновить</button><button data-op="logout">Выйти</button><p id="counters"></p></div>',
  '<div class="panel"><h2>Юридические документы</h2><p>Публикуйте только утверждённые юристом тексты. Новая редакция сохранится отдельно от предыдущей.</p><form id="documentForm"><select name="slug"><option value="offer">Оферта</option><option value="rules">Правила</option><option value="privacy">Политика конфиденциальности</option><option value="processing">Обработка данных</option><option value="distribution">Распространение анкеты</option><option value="esignature">Электронная подпись</option><option value="overview">Обзор функционала</option><option value="safety">Безопасность</option><option value="portfolio">Портфолио</option></select><input name="title" placeholder="Название"><textarea name="body" placeholder="Полный текст утверждённого документа" rows="8" required></textarea><button>Опубликовать новую версию</button></form><p><a href="/documents">Открыть документы</a></p></div>',
  '<div class="panel"><h2>Источники Telegram</h2><form id="source"><input name="id" placeholder="-100... ID источника" required><input name="city" placeholder="Город"><input name="topic" placeholder="Тема"><button>Добавить / включить</button></form><pre id="sources"></pre></div>',
@@ -65,7 +39,7 @@ const appHtml = [
  'async function api(path,body){const r=await fetch("/admin/"+path,{method:body?"POST":"GET",headers:{"content-type":"application/json"},body:body?JSON.stringify(body):undefined,credentials:"same-origin"});const d=await r.json();if(!r.ok)throw Error(d.error||"Ошибка");return d}',
  'const view=(id,obj)=>{$(id).textContent=typeof obj==="string"?obj:JSON.stringify(obj,null,2)};',
  'async function refresh(){try{const d=await api("data");$("login").style.display="none";$("dashboard").style.display="block";view("counters",d.stats);view("sources",d.sources);view("candidates",d.candidates);view("pending",d.pending);view("reports",d.reports);view("users",d.users);$("msg").textContent=""}catch(e){$("dashboard").style.display="none";$("login").style.display="block";$("msg").textContent=e.message}}',
- '$("form").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("login",{password:f.get("password"),otp:f.get("otp")});e.target.reset();refresh()}catch(err){$("msg").textContent=err.message}};',
+ '$("form").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("login",{password:f.get("password")});e.target.reset();refresh()}catch(err){$("msg").textContent=err.message}};',
  '$("documentForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);if(!confirm("Вы уверены, что документ юридически утверждён?"))return;try{const result=await api("action",{action:"document_publish",slug:f.get("slug"),title:f.get("title"),body:f.get("body")});$("msg").textContent="Опубликована версия "+result.document.version;refresh()}catch(err){$("msg").textContent=err.message}};',
  '$("source").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:"source_add",id:f.get("id"),city:f.get("city"),topic:f.get("topic")});refresh()}catch(err){$("msg").textContent=err.message}};',
  '$("ticketForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:"ticket_reply",id:f.get("id"),message:f.get("message")});e.target.reset();refresh()}catch(err){$("msg").textContent=err.message}};',
@@ -79,8 +53,8 @@ const appHtml = [
 export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
  const url=new URL(req.url);
  if(!url.pathname.startsWith("/admin"))return null;
- const enabled=!!Bun.env.ADMIN_PASSWORD&&!!Bun.env.ADMIN_TOTP_SECRET;
- if(!enabled)return json({error:"Админка не настроена: нужны ADMIN_PASSWORD и ADMIN_TOTP_SECRET."},503);
+ const enabled=!!Bun.env.ADMIN_PASSWORD;
+ if(!enabled)return json({error:"Админка не настроена: задайте ADMIN_PASSWORD."},503);
  if(url.pathname==="/admin"&&req.method==="GET"){
   return new Response(appHtml,{headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store","content-security-policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'","x-content-type-options":"nosniff","x-frame-options":"DENY"}});
  }
@@ -89,7 +63,7 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
   const previous=attempts.get(address)||{n:0,until:0};
   if(previous.until>Date.now())return json({error:"Слишком много попыток входа."},429);
   let body;try{body=await req.json()}catch{return json({error:"Некорректный запрос"},400)}
-  const valid=equal(body?.password,Bun.env.ADMIN_PASSWORD)&&await otpValid(Bun.env.ADMIN_TOTP_SECRET,body?.otp);
+  const valid=equal(body?.password,Bun.env.ADMIN_PASSWORD);
   if(!valid){
    previous.n++;previous.until=Date.now()+(previous.n>=5?300000:1500);
    attempts.set(address,previous);return json({error:"Неверные данные."},401);
