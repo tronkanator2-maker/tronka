@@ -13,5 +13,5 @@ test("all help cards are available without unpublished document dependencies",()
 test("portfolio and safety guides include actionable information",()=>{
  expect(GUIDES.portfolio.text).toContain("фото");
  expect(GUIDES["safe-casting"].text).toContain("предоплату");
- expect(GUIDES.posting.text).toContain("оплату");
+ expect(GUIDES.posting.text).toContain("гонорар");
 });
