@@ -1,5 +1,5 @@
 import {test,expect} from "bun:test";
-import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,isPreConsentCallback,isPreConsentMessageAllowed,toggleTestAcknowledgement,activateTestAccess,revokeTestAccess,testWarning} from "../test-mode.ts";
+import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,isPreConsentCallback,isPreConsentMessageAllowed,createConsentEditQueue,toggleTestAcknowledgement,activateTestAccess,revokeTestAccess,testWarning} from "../test-mode.ts";
 import {parseFields,field} from "../engine.ts";
 
 const testEnv={REGISTRATION_ENABLED:"true",TEST_MODE:"true"};
@@ -118,4 +118,27 @@ test("support message after tapping Support passes registration gate",()=>{
  expect(isPreConsentMessageAllowed("/cancel","support")).toBe(true);
  expect(isPreConsentMessageAllowed("Обычное сообщение","")).toBe(false);
  expect(isPreConsentMessageAllowed("Обычное сообщение","delete_confirm")).toBe(false);
+});
+
+test("rapid taps on the same consent screen edit in order; different users remain independent",async()=>{
+ const queue=createConsentEditQueue();
+ const order=[];
+ let release;
+ const gate=new Promise(resolve=>{release=resolve});
+ const first=queue(1,async()=>{order.push("first:start");await gate;order.push("first:end")});
+ const second=queue(1,async()=>{order.push("second:start")});
+ const third=queue(2,async()=>{order.push("other-user");});
+ await third;
+ expect(order).toContain("other-user");
+ expect(order).not.toContain("second:start");
+ release();
+ await Promise.all([first,second]);
+ expect(order.indexOf("second:start")).toBeGreaterThan(order.indexOf("first:end"));
+});
+test("a failed Telegram UI edit doesn't permanently block later taps",async()=>{
+ const queue=createConsentEditQueue();
+ const first=queue(22,async()=>{throw new Error("telegram timeout")});
+ const second=queue(22,async()=>true);
+ await expect(first).rejects.toThrow("telegram timeout");
+ expect(await second).toBe(true);
 });
