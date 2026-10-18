@@ -1,5 +1,5 @@
 import {SQL} from "bun";
-import {parseStartTarget,parseOnboardTarget,parseReferralStart,parseReferralOnboard,safeRegistrationTarget} from "./deep-links.ts";
+import {parseStartTarget,parseOnboardTarget,parseReferralStart,parseReferralOnboard} from "./deep-links.ts";
 import {leavingToHome} from "./navigation-state.ts";
 import {prepareAcceptedResponseOutbox,acceptResponseForOwner,deliverAcceptedResponses} from "./response-acceptance.ts";
 import {prepareAcceptedInvitationOutbox,acceptInvitationForRecipient,deliverAcceptedInvitations} from "./invite-acceptance.ts";
@@ -10,7 +10,7 @@ import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
 import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
 import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer,toggleProfileRole,canFinishWizardNow} from "./profile-wizard.ts";
-import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,isPreConsentCallback,isPreConsentMessageAllowed,createConsentEditQueue,toggleTestAcknowledgement,activateTestAccess,revokeTestAccess,testWarning,testMenuText} from "./test-mode.ts";
+import {isTestMode,canRegister,canUseTestFeatures,createConsentEditQueue,revokeTestAccess,testMenuText} from "./test-mode.ts";
 import {redactContacts,publicProfileEntries,publicProfileAllowed} from "./visibility.ts";
 import {adminApp} from "./admin.ts";
 import {setupSourceHealth,allowanceForModel,reviewSourceHealth} from "./source-health.ts";
@@ -106,20 +106,7 @@ const buttons=rows=>({inline_keyboard:rows.map(row=>row.map(([text,callback_data
 async function change(id,fields){let sets=[],vals=[];for(const [k,v] of Object.entries(fields)){const json=v!==null&&typeof v==="object";vals.push(json?JSON.stringify(v):v);sets.push(k+"=$"+vals.length+(json?"::jsonb":""));}vals.push(id);await sql("UPDATE mm_users SET "+sets.join(",")+" WHERE id=$"+vals.length,...vals)}
 async function who(f){return(await sql("INSERT INTO mm_users(id,username,first_name) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name RETURNING *",f.id,f.username||null,f.first_name||""))[0]}
 const consentNames=["Оферта и правила сервиса","Обработка персональных данных","Показ анкеты другим"];
-const consentEditQueue=createConsentEditQueue();
 const inviteCreationQueue=createConsentEditQueue();
-const testConsentComplete=hasTestAcknowledgements;
-const testConsentBoard=u=>{
- const c=u?.consent||{};
- const target=safeRegistrationTarget(u?.filters?.pendingStartTarget);
- const next=target?"onboard:"+target:"test:agree";
- const rows=["Условия участия","Обработка введённых данных","Публикация анкеты"]
-  .map((label,i)=>[[(c["test_check_"+i]===true?"✅ ":"☐ ")+label,"test:consent:"+i]]);
- rows.push([["📖 Описание пунктов","test:docs"]]);
- if(testConsentComplete(c))rows.push([["✨ Продолжить",next]]);
- return buttons(rows);
-};
-const testConsentDetails="Перед началом:\n\n1. Участие добровольное, с 18 лет.\n2. Сервис сохраняет введённые данные для работы анкет и заявок. Не указывайте конфиденциальные сведения и реальные документы.\n3. После публикации анкету смогут увидеть другие участники.\n\nОтозвать разрешение и удалить сведения можно в разделе «Личные данные». Эти пояснения не заменяют утверждённые юридические документы.";
 let cachedDocHashes=null,cachedDocHashesUntil=0;
 async function currentDocumentHashes(){
  if(testMode())return {};
@@ -131,15 +118,10 @@ async function currentDocumentHashes(){
 function consentBoard(u,hashes){let c=u.consent||{};
  const ok=i=>consentIsCurrent(c,hashes,i);
  return buttons([...consentNames.map((x,i)=>[[(ok(i)?"✅ ":"☐ ")+x,"consent:"+i]]),[["📄 Документы","docs"]],...([0,1,2].every(ok)?[[["Продолжить","go"]]]:[])])}
-const welcomeControls=(intent="home")=>{
- const safeIntent=/^[A-Za-z0-9:_-]{1,42}$/.test(intent)?intent:"home";
- return buttons([[["✨ Начать работу","onboard:"+safeIntent]],[["📄 Информация о сервисе","docs"],["🎬 Посмотреть пример","demo:home"]]]);
-};
 async function begin(u){
  if(u.blocked||u.suspended)return send(u.id,"Аккаунт ограничен. Напишите /support или используйте /mydata.");
  if(!testReady()||(!testMode()&&!(await legalReady(sql))))return send(u.id,"«Мир моделей» готовится к запуску. Пока доступно демо.",buttons([[["🎬 Демо","demo:home"]],[["📄 Документы","docs"]]]));
  if(testMode()){
-  if(!canUseTestFeatures(Bun.env,u.consent))return send(u.id,"Перед началом отметьте три отдельных пункта.",testConsentBoard(u));
   const resume=u.state==="wizard"?[[{text:"▶️ Продолжить анкету",callback_data:"wizard:resume"},{text:"❌ Отменить",callback_data:"wizard:cancel"}]]:u.state==="profile_confirm"?[[{text:"✅ Сохранить черновик",callback_data:"profile_save"},{text:"✏️ Исправить",callback_data:"edit_profile"}]]:u.filters?.profileDraft?[[{text:"📝 Вернуться к черновику",callback_data:"edit_profile"},{text:"❌ Отменить",callback_data:"wizard:cancel"}]]:u.state==="job_wizard"?[[{text:"▶️ Продолжить заявку",callback_data:"jobwizard:resume"},{text:"❌ Отменить",callback_data:"jobwizard:cancel"}]]:u.state==="job_confirm"?[[{text:"✅ Опубликовать заявку",callback_data:"publish"},{text:"✏️ Исправить",callback_data:"job_template"}]]:[];
   return send(u.id,testMenuText+(resume.length?"\n\n📝 У вас есть незавершённая анкета.":""),{inline_keyboard:[...resume,...menu.inline_keyboard]});
  }
@@ -572,16 +554,10 @@ async function onMessage(m){
  if(text.startsWith("/start")&&(Bun.env.REGISTRATION_ENABLED!=="true"||(!testMode()&&!(await legalReady(sql))))){
   return send(m.from.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации документов и проверки интеграций. Пока можно посмотреть демонстрацию.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));
  }
+ // Only a new account gets referral credit in the open developer flow.
+ const referralStart=testMode()&&testReady()?parseReferralStart(text):null;
+ const firstVisit=referralStart?!(await sql("SELECT id FROM mm_users WHERE id=$1",m.from.id)).length:false;
  let u=await who(m.from);
- if(testMode()&&testReady()&&!canUseTestFeatures(Bun.env,u.consent)){
-  const startTarget=parseStartTarget(text)||parseReferralStart(text);
-  if(startTarget){
-   await sql("UPDATE mm_users SET filters=jsonb_set(COALESCE(filters,'{}'::jsonb),'{pendingStartTarget}',to_jsonb($2::text),TRUE) WHERE id=$1",u.id,startTarget.callback);
-   u={...u,filters:{...(u.filters||{}),pendingStartTarget:startTarget.callback}};
-  }
-  if(!isPreConsentMessageAllowed(text,u.state))
-   return send(u.id,"✨ <b>Добро пожаловать в «Мир моделей»!</b>\nПрочитайте три пункта и отметьте каждый перед началом.",testConsentBoard(u));
- }
  let id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
  if(t==="/cancel"){const f=clearJobWizard(discardProfileDraft(u.filters));delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftToken;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
  if(t==="/help")return send(id,"ℹ️ <b>Мир моделей</b>\n/start — главное меню\n/demo — попробовать без анкеты\n/cancel — отмена текущего действия\n/mydata — экспорт своих данных\n/deleteaccount — удалить аккаунт\n\nЛичные данные можно посмотреть или удалить через /mydata и /deleteaccount.",buttons([[["👤 Моя анкета","profile"],["ℹ️ Как работает","how"]],[["🏠 В меню","home"]]]));
@@ -590,13 +566,14 @@ async function onMessage(m){
  const exited=leavingToHome(u);
  if(exited){await change(id,exited);u={...u,...exited};}
  const payload=t.trim().split(/\s+/)[1]||"";
- // A referral is recorded only after first completed onboarding, not by a later /start.
- if(/^job_\d+$/.test(payload)&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&(testMode()||u.phone)&&allConsentsCurrent(u.consent,await currentDocumentHashes())){
+ if(referralStart&&firstVisit&&referralStart.id!==Number(id))
+  await sql("INSERT INTO mm_referrals(inviter,invitee) SELECT id,$2 FROM mm_users WHERE id=$1 AND id<>$2 ON CONFLICT(invitee) DO NOTHING",referralStart.id,id);
+ if(parseStartTarget(t)?.kind==="job"&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&(testMode()||u.phone)&&allConsentsCurrent(u.consent,await currentDocumentHashes())){
   const j=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",Number(payload.slice(4))))[0];
   if(j){await card(id,j);return begin(u)}
   await send(id,"Эта заявка больше не актуальна.");return begin(u);
  }
- if(/^profile_\d+$/.test(payload)&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&(testMode()||u.phone)&&allConsentsCurrent(u.consent,await currentDocumentHashes())){
+ if(parseStartTarget(t)?.kind==="profile"&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&(testMode()||u.phone)&&allConsentsCurrent(u.consent,await currentDocumentHashes())){
   const target=(await sql("SELECT * FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE AND photo IS NOT NULL",Number(payload.slice(8))))[0];
   if(target&&eligibleProfile(target.profile,target.photo)&&allConsentsCurrent(target.consent,await currentDocumentHashes())){await profile(id,target);return begin(u)}
   await send(id,"Эта анкета сейчас не участвует в поиске.");return begin(u);
@@ -684,57 +661,14 @@ async function onCallback(c){
    return send(c.from.id,g.text,buttons([[["📚 Другие материалы","articles"],["🏠 В меню","home"]]]));
   }
 
- const requestedAction=String(c.data||"");
- const onboardingClick=requestedAction==="test:agree"||requestedAction.startsWith("onboard:");
- let u=await who(c.from),id=u.id,a=requestedAction;
- if(a.startsWith("test:consent:")){
-  if(!testMode()||!testReady())return send(id,"Регистрация недоступна.");
-  const n=Number(a.slice("test:consent:".length));
-  if(!Number.isInteger(n)||n<0||n>2)return;
-  return consentEditQueue(id,async()=>{
-   const toggled=await toggleTestAcknowledgement(sql,id,n);
-   if(!toggled)return send(id,"Не удалось найти регистрацию. Отправьте /start.");
-   const markup=testConsentBoard({...u,consent:toggled.consent});
-   if(!c.message?.message_id)return send(id,"Отметки сохранены.",markup);
-   // The database update must not be undone by Telegram retrying a slow markup edit.
-   try{
-    const edited=await call("editMessageReplyMarkup",{chat_id:id,message_id:c.message.message_id,reply_markup:markup});
-    if(!edited.ok&&!/message is not modified/i.test(edited.description||"")){
-     console.warn("Consent edit not delivered",edited.error_code||"unknown");
-     try{await send(id,"Отметки сохранены. Обновите экран командой /start.",markup)}catch(e){console.warn("Consent fallback unavailable",String(e))}
-    }
-    return;
-   }catch(e){
-    console.warn("Consent edit delayed; saved database state preserved",String(e));
-   }
-  });
+ let u=await who(c.from),id=u.id,a=String(c.data||"");
+ // Old inline checkboxes must never touch PostgreSQL or fabricate consent.
+ if(a.startsWith("test:consent:")||a==="test:docs"||a==="test:agree")return begin(u);
+ if(a.startsWith("onboard:")){
+  if(!testMode()||!testReady())return begin(u);
+  a=a.slice("onboard:".length);
+  if(a==="home"||parseReferralOnboard(a)||!parseOnboardTarget(a))return begin(u);
  }
- if(a==="test:docs")return send(id,testConsentDetails,testConsentBoard(u));
- if(onboardingClick){
-  if(!testMode()||!testReady())return send(id,"Регистрация пока недоступна.");
-  const firstSignup=!canUseTestFeatures(Bun.env,u.consent);
-  const accepted=await activateTestAccess(sql,id);
-  if(!accepted)return send(id,"Отметьте все три пункта, чтобы продолжить.",testConsentBoard(u));
-  u={...u,consent:accepted.consent,active:true};
-  // Old test:agree messages also recover the saved destination.
-  const pending=safeRegistrationTarget(u.filters?.pendingStartTarget);
-  a=requestedAction.startsWith("onboard:")?requestedAction.slice(8):(pending||"home");
-  if(u.filters?.pendingStartTarget){
-   await sql("UPDATE mm_users SET filters=COALESCE(filters,'{}'::jsonb)-'pendingStartTarget' WHERE id=$1",id);
-   const filters={...(u.filters||{})};delete filters.pendingStartTarget;u={...u,filters};
-  }
-  const referral=parseReferralOnboard(a);
-  if(referral){
-   if(firstSignup&&pending===a&&referral.id!==id){
-    const inviter=(await sql("SELECT id FROM mm_users WHERE id=$1",referral.id))[0];
-    if(inviter)await sql("INSERT INTO mm_referrals(inviter,invitee) VALUES($1,$2) ON CONFLICT(invitee) DO NOTHING",referral.id,id);
-   }
-   return begin(u);
-  }
-  if(a==="home")return begin(u);
- }
- if(testMode()&&!canUseTestFeatures(Bun.env,u.consent)&&!isPreConsentCallback(a))
-  return send(id,"Перед использованием сервиса подтвердите условия.",testConsentBoard(u));
  // A shared deep link must open its intended target after first-time registration.
  const deepTarget=parseOnboardTarget(a);
  if(deepTarget){
@@ -755,9 +689,9 @@ async function onCallback(c){
   if(!testMode())return send(id,"Эта функция сейчас недоступна.");
   await revokeTestAccess(sql,id);
   await sql("UPDATE mm_jobs SET paused=TRUE WHERE owner=$1 AND status='active'",id);
-  return send(id,"Разрешение отозвано. Анкета скрыта из каталога, заявки остановлены. Удаление данных: /deleteaccount");
+  return send(id,"Анкета скрыта из каталога, активные заявки остановлены. Данные можно удалить через /deleteaccount. Возобновить поиск можно в главном меню.",buttons([[["🏠 В меню","home"]]));
  }
- if(a==="privacy")return send(id,"🔐 <b>Данные и приватность</b>\nЭкспорт показывает сведения, сохранённые сервисом. Удаление аккаунта безвозвратное; ранее отправленные Telegram-сообщения других людей останутся.",buttons([[["📦 Экспорт данных","privacy:export"]],[["🗑 Удалить аккаунт","privacy:delete"]],...(testMode()?[[["Отозвать разрешение","test:revoke"]]]:[]),[["◀️ В меню","home"]]]));
+ if(a==="privacy")return send(id,"🔐 <b>Данные и приватность</b>\nЭкспорт показывает сведения, сохранённые сервисом. Удаление аккаунта безвозвратное; ранее отправленные Telegram-сообщения других людей останутся.",buttons([[["📦 Экспорт данных","privacy:export"]],[["🗑 Удалить аккаунт","privacy:delete"]],...(testMode()?[[["Скрыть анкету и остановить заявки","test:revoke"]]]:[]),[["◀️ В меню","home"]]]));
  if(a==="privacy:export"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Сведения ещё не сохранены.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Ошибка отправки файла.");return;}
  if(a==="privacy:delete"){await change(id,{state:"delete_confirm"});return send(id,"<b>Подтвердите окончательное удаление</b>\nАнкета, фото и объявления будут удалены из базы. Уже отправленные сообщения в чужих Telegram-чатах сохранятся.",buttons([[["Да, удалить всё","deleteaccount:confirm"]],[["Отменить","deleteaccount:cancel"]]]));}
  if(a==="deleteaccount:cancel"){await change(id,{state:""});return send(id,"Удаление отменено.",menu);}
@@ -768,7 +702,7 @@ async function onCallback(c){
  }
  if((u.blocked||u.suspended)&&!["support","report"].includes(a)&&!a.startsWith("reportjob:")&&!a.startsWith("reportuser:"))return send(id,"Ваш аккаунт ограничен. Вы можете обратиться в поддержку, экспортировать или удалить данные.");
  if(a.startsWith("consent:")){
- if(testMode())return send(id,"Отметки согласия находятся на стартовом экране.",testConsentBoard(u));
+ if(testMode())return begin(u);
  if(!(await legalReady(sql)))return send(id,"Сначала должны быть опубликованы документы сервиса.");
  const n=Number(a.slice("consent:".length));if(!Number.isInteger(n)||n<0||n>2)return;
  const hashes=await currentDocumentHashes(),co={...(u.consent||{})};
