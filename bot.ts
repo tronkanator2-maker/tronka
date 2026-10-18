@@ -214,8 +214,9 @@ async function card(to,j,backToJobs=null){
  if(backToJobs!==null)rows.push([["◀️ К списку заявок",backToJobs],["🏠 В меню","home"]]);
  return send(to,lines.join("\n"),buttons(rows));
 }
-async function matches(u,j){
- if(!u||u.blocked||u.suspended||!u.active||!allConsentsCurrent(u.consent,await currentDocumentHashes())||!eligibleProfile(u.profile,u.photo)||j.paused||j.status!=="active")return false;
+async function matches(u,j,documentHashes=null){
+ const hashes=documentHashes||await currentDocumentHashes();
+ if(!u||u.blocked||u.suspended||!u.active||!allConsentsCurrent(u.consent,hashes)||!eligibleProfile(u.profile,u.photo)||j.paused||j.status!=="active")return false;
  const p=u.profile;
  // Level 2 completion is validated by eligibleProfile above.
  if(!roleMatch(get(j.body,"кого ищу"),get(p,"кто вы")))return false;
@@ -320,9 +321,12 @@ async function profileBackfill(p){
  for(const j of jobs)try{await sendMatchedProfile(j,p)}catch(e){console.error("profile backfill",String(e))}
 }
 async function matchingJobs(u,limit=50){
- const jobs=await sql("SELECT * FROM mm_jobs WHERE status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' ORDER BY created_at DESC LIMIT 200");
+ const [jobs,hashes]=await Promise.all([
+  sql("SELECT * FROM mm_jobs WHERE status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' ORDER BY created_at DESC LIMIT 200"),
+  currentDocumentHashes()
+ ]);
  const matched=[];
- for(const job of jobs){if(await matches(u,job))matched.push(job);if(matched.length>=limit)break}
+ for(const job of jobs){if(await matches(u,job,hashes))matched.push(job);if(matched.length>=limit)break}
  return matched;
 }
 

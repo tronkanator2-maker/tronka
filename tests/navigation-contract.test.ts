@@ -65,6 +65,15 @@ test("job and profile listings use compact bounded pages and personal listings s
  expect(callback).toContain('const page=items.slice(0,5)');
 });
 
+test("search preloads consent document hashes once for the whole matching batch",()=>{
+ const matcher=source.slice(source.indexOf("async function matches("),source.indexOf("async function deliverTo("));
+ const search=source.slice(source.indexOf("async function matchingJobs("),source.indexOf("async function browseProfiles("));
+ expect(matcher).toContain("async function matches(u,j,documentHashes=null)");
+ expect(search).toContain("const [jobs,hashes]=await Promise.all([");
+ expect((search.match(/currentDocumentHashes\(\)/g)||[]).length).toBe(1);
+ expect(search).toContain("matches(u,job,hashes)");
+});
+
 test("invitation issue serializes double-clicks and queues delivery instead of synchronously sending a profile",()=>{
  const cb=source.slice(source.indexOf("async function onCallback("));
  const issue=cb.slice(cb.indexOf('if(a.startsWith("invite:"))'),cb.indexOf('if(a.startsWith("rejectinvite:"))'));
