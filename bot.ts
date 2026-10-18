@@ -1,6 +1,7 @@
 import {SQL} from "bun";
 import {parseStartTarget,parseOnboardTarget,parseReferralStart,parseReferralOnboard,safeRegistrationTarget} from "./deep-links.ts";
 import {leavingToHome} from "./navigation-state.ts";
+import {parsePageOffset,pageNavigation} from "./pagination.ts";
 import {getGuide,guideMenu} from "./guides.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
@@ -980,22 +981,42 @@ if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправ
  }
  const row=saved[0],filters={...(u.filters||{})};delete filters.draft;delete filters.draftToken;
  await change(id,{state:"",filters});
- await send(id,"✅ Заявка №"+row.id+" опубликована.");await dispatch(row);return}if(a==="jobs"){
- const hasProfile=eligibleProfile(u.profile,u.photo);
- let js;
- if(hasProfile){
-  js=await matchingJobs(u,30);
- }else{
-  // Read-only previews: never auto-send or expose the external source contact.
-  const recent=await sql("SELECT * FROM mm_jobs WHERE status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' AND owner<>$1 ORDER BY created_at DESC LIMIT 40",id);
-  js=recent.filter(job=>!isExplicitAdultCasting([get(job.body,"описание"),get(job.body,"требования"),get(job.body,"тип работы")].join(" "))).slice(0,5);
+ await send(id,"✅ Заявка №"+row.id+" опубликована.");await dispatch(row);return}
+ if(a==="jobs"||a.startsWith("jobs:")){
+  const offset=parsePageOffset(a,"jobs");
+  if(offset===null)return send(id,"Страница поиска недоступна.",buttons([[["🔎 Начать поиск","jobs"],["🏠 В меню","home"]]]));
+  const hasProfile=eligibleProfile(u.profile,u.photo);
+  let js;
+  if(hasProfile)js=await matchingJobs(u,offset+6);
+  else{
+   // Anonymous preview is deliberately limited to five non-adult listings.
+   const recent=await sql("SELECT * FROM mm_jobs WHERE status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' AND owner<>$1 ORDER BY created_at DESC LIMIT 40",id);
+   js=recent.filter(job=>!isExplicitAdultCasting([get(job.body,"описание"),get(job.body,"требования"),get(job.body,"тип работы")].join(" "))).slice(0,5);
+  }
+  const page=js.slice(offset,offset+5);
+  if(!page.length)return send(id,offset?"На этой странице заявок больше нет.":"Подходящих заявок пока нет. Попробуйте изменить фильтры.",buttons([[["🎯 Фильтры","filters"],["➕ Создать заявку","new"]],[["🏠 В меню","home"]]]));
+  if(!hasProfile&&offset===0)await send(id,"🔎 <b>Предпросмотр открытых заявок</b>\nМожно посмотреть условия без готовой анкеты. Для отклика создайте профиль и добавьте главное фото.");
+  for(const job of page)await card(id,job);
+  const nav=pageNavigation("jobs",offset,js.length>offset+5);
+  const controls=[];
+  if(nav.length)controls.push(nav);
+  controls.push([["🎯 Фильтры","filters"],["🏠 В меню","home"]]);
+  return send(id,"📢 Показано заявок: "+page.length+". Используйте кнопки для других страниц.",buttons(controls));
  }
- if(!js.length)return send(id,hasProfile?"Подходящих заявок по выбранным фильтрам пока нет.":"Пока нет открытых заявок для предпросмотра. Можно создать свою заявку.",buttons([[["🎯 Фильтры","filters"],["➕ Создать заявку","new"]],[["🏠 В меню","home"]]]));
- if(!hasProfile)await send(id,"🔎 <b>Предпросмотр открытых заявок</b>\nМожно посмотреть условия без фото и анкеты. Чтобы откликнуться, сначала создайте профиль и добавьте главное фото.");
- for(const j of js)await card(id,j);
- if(hasProfile&&js.length<=3)await send(id,"По вашим настройкам сейчас "+js.length+" подходящих заявок.");
- return;
-}if(a==="mine"){let js=await sql("SELECT * FROM mm_jobs WHERE owner=$1 ORDER BY id DESC LIMIT 20",id);if(!js.length)return send(id,"Ваших заявок пока нет.");for(let j of js)await send(id,"№"+j.id+" — "+esc(get(j.body,"название заявки"))+" ("+(j.paused?"поиск остановлен":esc(j.status))+")",buttons([[[j.paused?"▶️ Восстановить":"⏸️ Остановить","jobpause:"+j.id],["✏️ Изменить","jobedit:"+j.id],["Закрыть","close:"+j.id]]]));return}if(a.startsWith("jobedit:")){
+ if(a==="mine"||a.startsWith("mine:")){
+  const offset=parsePageOffset(a,"mine");
+  if(offset===null)return send(id,"Страница списка недоступна.",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
+  const items=await sql("SELECT * FROM mm_jobs WHERE owner=$1 ORDER BY id DESC LIMIT 6 OFFSET $2",id,offset);
+  const page=items.slice(0,5);
+  if(!page.length)return send(id,offset?"Других заявок пока нет.":"У вас пока нет заявок.",buttons([[["➕ Создать заявку","new"],["🏠 В меню","home"]]]));
+  const lines=page.map(j=>"№"+j.id+" · "+esc(get(j.body,"название заявки"))+" — "+(j.status!=="active"?esc(j.status):j.paused?"поиск остановлен":"активна"));
+  const controls=page.filter(j=>j.status==="active").map(j=>[[j.paused?"▶️ Возобновить №"+j.id:"⏸ Остановить №"+j.id,"jobpause:"+j.id],["✏️ Изменить №"+j.id,"jobedit:"+j.id],["✅ Закрыть №"+j.id,"close:"+j.id]]);
+  const nav=pageNavigation("mine",offset,items.length>5);
+  if(nav.length)controls.push(nav);
+  controls.push([["➕ Создать заявку","new"],["🏠 В меню","home"]]);
+  return send(id,"📌 <b>Мои заявки</b>\n\n"+lines.join("\n")+"\n\nКнопки управления есть только у активных заявок.",buttons(controls));
+ }
+ if(a.startsWith("jobedit:")){
  const jobId=Number(a.slice("jobedit:".length));
  const job=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND owner=$2 AND status='active'",jobId,id))[0];
  if(!job)return send(id,"Эту заявку больше нельзя изменять.");
@@ -1020,7 +1041,12 @@ if(a.startsWith("updatejob:")){
 }
 if(a.startsWith("jobpause:")){const rows=await sql("UPDATE mm_jobs SET paused=NOT paused WHERE id=$1 AND owner=$2 AND status='active' RETURNING *",Number(a.slice(9)),id);
  if(rows.length&&!rows[0].paused)await dispatch(rows[0]);
- return send(id,rows.length?(rows[0].paused?"Поиск анкет по этой заявке остановлен.":"Поиск анкет по этой заявке возобновлён."):"Заявка недоступна.")}if(a.startsWith("close:")){await sql("UPDATE mm_jobs SET status='closed' WHERE id=$1 AND owner=$2",+a.slice(6),id);return send(id,"Заявка закрыта.")} if(a.startsWith("browse_role:")){
+ return send(id,rows.length?(rows[0].paused?"Поиск анкет по этой заявке остановлен.":"Поиск анкет по этой заявке возобновлён."):"Заявка недоступна.")}if(a.startsWith("close:")){
+ const jobId=Number(a.slice(6));
+ if(!Number.isSafeInteger(jobId)||jobId<=0)return send(id,"Некорректная заявка.");
+ const closed=await sql("UPDATE mm_jobs SET status='closed' WHERE id=$1 AND owner=$2 AND status='active' RETURNING id",jobId,id);
+ return send(id,closed.length?"✅ Заявка №"+jobId+" закрыта.":"Заявка уже закрыта или недоступна.",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
+} if(a.startsWith("browse_role:")){
   const key=a.slice("browse_role:".length);
   const role=key==="all"?"":ROLES[Number(key)];
   if(role===undefined)return;
