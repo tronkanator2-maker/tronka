@@ -5,7 +5,7 @@ import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
 import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
 import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer,toggleProfileRole,canFinishWizardNow} from "./profile-wizard.ts";
-import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,isPreConsentCallback,isPreConsentMessageAllowed,toggleTestAcknowledgement,activateTestAccess,revokeTestAccess,testWarning,testMenuText} from "./test-mode.ts";
+import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,isPreConsentCallback,isPreConsentMessageAllowed,createConsentEditQueue,toggleTestAcknowledgement,activateTestAccess,revokeTestAccess,testWarning,testMenuText} from "./test-mode.ts";
 import {redactContacts,publicProfileEntries,publicProfileAllowed} from "./visibility.ts";
 import {adminApp} from "./admin.ts";
 import {setupSourceHealth,allowanceForModel,reviewSourceHealth} from "./source-health.ts";
@@ -98,6 +98,7 @@ const buttons=rows=>({inline_keyboard:rows.map(row=>row.map(([text,callback_data
 async function change(id,fields){let sets=[],vals=[];for(const [k,v] of Object.entries(fields)){const json=v!==null&&typeof v==="object";vals.push(json?JSON.stringify(v):v);sets.push(k+"=$"+vals.length+(json?"::jsonb":""));}vals.push(id);await sql("UPDATE mm_users SET "+sets.join(",")+" WHERE id=$"+vals.length,...vals)}
 async function who(f){return(await sql("INSERT INTO mm_users(id,username,first_name) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name RETURNING *",f.id,f.username||null,f.first_name||""))[0]}
 const consentNames=["Оферта и правила сервиса","Обработка персональных данных","Показ анкеты другим"];
+const consentEditQueue=createConsentEditQueue();
 const testConsentComplete=hasTestAcknowledgements;
 const testConsentBoard=u=>{
  const c=u?.consent||{};
@@ -671,14 +672,25 @@ async function onCallback(c){
  let u=await who(c.from),id=u.id,a=requestedAction;
  if(a.startsWith("test:consent:")){
   if(!testMode()||!testReady())return send(id,"Регистрация недоступна.");
-  const n=Number(a.slice("test:consent:".length));if(!Number.isInteger(n)||n<0||n>2)return;
-  const toggled=await toggleTestAcknowledgement(sql,id,n);
-  if(!toggled)return send(id,"Не удалось найти регистрацию. Отправьте /start.");
-  const markup=testConsentBoard({consent:toggled.consent});
-  if(!c.message?.message_id)return send(id,"Отметки сохранены.",markup);
-  const edited=await call("editMessageReplyMarkup",{chat_id:id,message_id:c.message.message_id,reply_markup:markup});
-  if(!edited.ok&&!/message is not modified/i.test(edited.description||""))return send(id,"Отметки сохранены.",markup);
-  return edited;
+  const n=Number(a.slice("test:consent:".length));
+  if(!Number.isInteger(n)||n<0||n>2)return;
+  return consentEditQueue(id,async()=>{
+   const toggled=await toggleTestAcknowledgement(sql,id,n);
+   if(!toggled)return send(id,"Не удалось найти регистрацию. Отправьте /start.");
+   const markup=testConsentBoard({consent:toggled.consent});
+   if(!c.message?.message_id)return send(id,"Отметки сохранены.",markup);
+   // The database update must not be undone by Telegram retrying a slow markup edit.
+   try{
+    const edited=await call("editMessageReplyMarkup",{chat_id:id,message_id:c.message.message_id,reply_markup:markup});
+    if(!edited.ok&&!/message is not modified/i.test(edited.description||"")){
+     console.warn("Consent edit not delivered",edited.error_code||"unknown");
+     try{await send(id,"Отметки сохранены. Обновите экран командой /start.",markup)}catch(e){console.warn("Consent fallback unavailable",String(e))}
+    }
+    return;
+   }catch(e){
+    console.warn("Consent edit delayed; saved database state preserved",String(e));
+   }
+  });
  }
  if(a==="test:docs")return send(id,testConsentDetails,testConsentBoard(u));
  if(onboardingClick){
