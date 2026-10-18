@@ -13,6 +13,21 @@ const names={
  portfolio:"Памятка успешного портфолио"
 };
 export const escapeDocument=s=>String(s??"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+const previewFields={
+ offer:["Исполнитель услуги и реквизиты","Состав услуг и порядок размещения анкеты или заявки","Стоимость, расчёты, отмена и возвраты","Дата начала действия и контакты оператора"],
+ rules:["Критерии размещения анкет и заявок","Запрещённый контент и порядок модерации","Порядок жалоб, ограничений и обжалования","Ответственность сторон и контакты поддержки"],
+ privacy:["Оператор данных и его реквизиты","Состав данных и цели обработки","Сроки хранения, удаление и получатели данных","Способы обращения субъекта данных"],
+ processing:["Оператор и конкретные цели обработки","Категории данных и перечень операций","Срок действия, отзыв и способ обращения","Контакты для вопросов о данных"],
+ distribution:["Какие данные анкеты будут опубликованы","Кому и на каких ресурсах они могут передаваться","Срок распространения и порядок отзыва","Контакт для изменения или удаления анкеты"],
+ esignature:["Как участник подтверждает электронное действие","Какие коды или записи подтверждают его авторство","Срок хранения доказательств и способ оспаривания","Контакты оператора"]
+};
+const pageHeaders={"content-type":"text/html; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"};
+function previewDocument(slug){
+ const title=names[slug]||"Документ",fields=previewFields[slug]||[];
+ const checklist=fields.map(x=>"<li><strong>[Заполнить перед запуском]</strong> "+escapeDocument(x)+"</li>").join("");
+ const body="<div style='padding:14px;border:2px solid #f0ad4e;border-radius:10px;background:#332b1b'><strong>ПРЕЗЕНТАЦИОННАЯ ЗАГЛУШКА · НЕ ЮРИДИЧЕСКИЙ ДОКУМЕНТ</strong><p>Этот экран показывает место и структуру раздела. Здесь нет утверждённых условий, и его нельзя использовать как согласие или основание для обработки данных. Перед публичным запуском владелец и юрист должны заменить заглушку полным текстом.</p></div><h2>Что заполнить</h2><ul>"+checklist+"</ul><p><strong>Статус:</strong> не утверждено и не опубликовано. Заглушка не засчитывается при проверке обязательных документов сервиса.</p><a href='/documents'>К списку документов</a>";
+ return new Response(wrap(title,body),{headers:pageHeaders});
+}
 export async function prepareDocuments(sql){
  await sql("CREATE TABLE IF NOT EXISTS mm_documents(slug TEXT NOT NULL,version INTEGER NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,sha256 TEXT NOT NULL,published_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),PRIMARY KEY(slug,version))");
  await sql("CREATE INDEX IF NOT EXISTS mm_documents_latest ON mm_documents(slug,published_at DESC)");
@@ -57,15 +72,20 @@ export async function publicDocumentRoute(req,sql){
  if(req.method!=="GET"||!path.startsWith("/documents"))return null;
  const entries=await latestDocuments(sql);
  if(path==="/documents"||path==="/documents/"){
-  const list=entries.map(d=>"<li><a href='/documents/"+encodeURIComponent(d.slug)+"'>"+escapeDocument(d.title)+"</a> <small>версия "+d.version+"</small></li>").join("");
-  return new Response(wrap("Документы сервиса",entries.length?"<ul>"+list+"</ul>":"<p>Документы пока не опубликованы.</p>"),{headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store"}});
+  const list=entries.map(d=>"<li><a href='/documents/"+encodeURIComponent(d.slug)+"'>"+escapeDocument(d.title)+"</a> <small>опубликована версия "+d.version+"</small></li>").join("");
+  const approved=new Set(entries.map(d=>d.slug));
+  const missing=requiredDocumentSlugs.filter(slug=>!approved.has(slug));
+  const drafts=missing.map(slug=>"<li><a href='/documents/"+slug+"'>"+escapeDocument(names[slug])+"</a> <small>презентационная заглушка · не утверждено</small></li>").join("");
+  const notice=missing.length?"<div style='padding:14px;border:2px solid #f0ad4e;border-radius:10px;background:#332b1b'><strong>Предпросмотр для согласования</strong><p>Разделы-заглушки помогают показать интерфейс заказчику. Они не являются правовыми документами и не открывают регистрацию в боевом режиме.</p></div>":"";
+  const sections=(entries.length?"<h2>Опубликованные версии</h2><ul>"+list+"</ul>":"")+(missing.length?"<h2>Не утверждены</h2><ul>"+drafts+"</ul>":"");
+  return new Response(wrap("Документы сервиса",notice+(sections||"<p>Обязательные документы опубликованы.</p>")),{headers:pageHeaders});
  }
- const slug=decodeURIComponent(path.slice("/documents/".length));
+ let slug;try{slug=decodeURIComponent(path.slice("/documents/".length))}catch{return new Response("Not found",{status:404})}
  if(!Object.hasOwn(names,slug))return new Response("Not found",{status:404});
  const docs=await sql("SELECT * FROM mm_documents WHERE slug=$1 ORDER BY version DESC LIMIT 1",slug);
- if(!docs.length)return new Response(wrap("Документ отсутствует","<p>Документ пока не опубликован.</p>"),{status:404,headers:{"content-type":"text/html; charset=utf-8"}});
+ if(!docs.length)return requiredDocumentSlugs.includes(slug)?previewDocument(slug):new Response(wrap("Документ отсутствует","<p>Документ пока не опубликован.</p>"),{status:404,headers:pageHeaders});
  const d=docs[0];
- return new Response(wrap(d.title,"<p>Версия "+d.version+" · Контрольная сумма: "+escapeDocument(d.sha256)+"</p><pre>"+escapeDocument(d.body)+"</pre><a href='/documents'>Все документы</a>"),{headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store","x-content-type-options":"nosniff"}});
+ return new Response(wrap(d.title,"<p>Версия "+d.version+" · Контрольная сумма: "+escapeDocument(d.sha256)+"</p><pre>"+escapeDocument(d.body)+"</pre><a href='/documents'>Все документы</a>"),{headers:pageHeaders});
 }
 
 

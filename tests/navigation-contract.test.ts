@@ -56,6 +56,31 @@ test("user-facing sample pages use clear fictional-example labels and no demo br
  expect(source).not.toContain('"/demo"');
 });
 
+test("examples keep job creation available and show a future reply flow without writing a fake response",()=>{
+ const exampleMenu=source.slice(source.indexOf("function demoMenu()"),source.indexOf("let profileRefreshWorkerRunning"));
+ const callback=source.slice(source.indexOf("async function onCallback(c){"));
+ expect(exampleMenu).toContain('"➕ Создать свою заявку","new"');
+ expect(exampleMenu).toContain('"sample:reply:"+item.id');
+ expect(callback).toContain('if(c.data?.startsWith("sample:reply:"))');
+ expect(callback).toContain("Отправка откликов по карточкам-примерам пока недоступна.");
+ expect(callback).toContain('buttons([[["➕ Создать свою заявку","new"]]');
+ expect(callback).toContain('if(a==="new")return send');
+ expect(callback).toContain('if(a.startsWith("reply:"))');
+ const placeholder=callback.slice(callback.indexOf('if(c.data?.startsWith("sample:reply:"))'),callback.indexOf('if(c.data?.startsWith("demo:"))'));
+ expect(placeholder).not.toContain("INSERT INTO mm_responses");
+});
+test("the create-job menu still opens both real creation flows and publishing prevents duplicates",()=>{
+ const callback=source.slice(source.indexOf("async function onCallback(c){"));
+ const create=callback.slice(callback.indexOf('if(a==="new")'),callback.indexOf('if(a==="jobs"||a.startsWith("jobs:"))'));
+ expect(create).toContain('"jobwizard:start"');
+ expect(create).toContain('"job_template"');
+ expect(callback).toContain('if(a==="job_template")');
+ expect(callback).toContain('if(a==="jobwizard:start")');
+ expect(callback).toContain('if(a==="publish")');
+ expect(callback).toContain("ON CONFLICT DO NOTHING RETURNING *");
+ expect(callback).toContain('already.id+" уже опубликована. Вторую копию не создаём."');
+});
+
 test("Home action is handled before consent gating and clears stale text-input modes",()=>{
  const callbackSection=source.slice(source.indexOf("async function onCallback("));
  const home=callbackSection.indexOf('if(a==="home"){');
@@ -168,4 +193,14 @@ test("a sixth new photo gives a visible limit response and does not trap upload 
  const callback=source.slice(source.indexOf('if(a==="addphoto")'),source.indexOf('if(a==="photo_done")'));
  expect(callback).toContain('u.photos.length>=5');
  expect(callback.indexOf('u.photos.length>=5')).toBeLessThan(callback.indexOf('await change(id,{state:"photo"})'));
+});
+
+test("the client-facing feature page separates working flows from pending integrations",()=>{
+ const callback=source.slice(source.indexOf("async function onCallback(c){"));
+ expect(callback).toContain('if(a==="feature_status")');
+ expect(callback).toContain("Создание и публикация заявок");
+ expect(callback).toContain("Реальные отклики");
+ expect(callback).toContain("не действуют как документы");
+ expect(callback).toContain("Оплата и возвраты");
+ expect(callback).toContain("Сейчас бот открыт в тестовом режиме");
 });

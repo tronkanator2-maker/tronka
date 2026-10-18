@@ -11,7 +11,7 @@ import {demoPage,demoItem,demoRoute,demoProfiles,demoJobs} from "./demo-catalog.
 import {prepareProfileRefreshQueue,queueProfileRefresh,runProfileRefreshBatch} from "./profile-refresh.ts";
 import {runProfileFanoutPage} from "./profile-fanout.ts";
 import {getGuide,guideMenu} from "./guides.ts";
-import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard} from "./job-wizard.ts";
+import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard,validateJobListing} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
 import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
 import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer,toggleProfileRole,canFinishWizardNow,structuredProfileErrors} from "./profile-wizard.ts";
@@ -173,15 +173,7 @@ function validProfile(p){
  return [...new Set(missing)];
 }
 function validJob(p){
- const missing=["название заявки","кого ищу","тип работы","город","формат и оплата","описание"].filter(k=>!get(p,k));
- if(get(p,"название заявки").length>40)missing.push("название — максимум 40 символов");
- const sought=get(p,"кого ищу").split(",").map(x=>x.trim().toLowerCase());
- if(!sought.length||sought.some(r=>!ROLES.includes(r)&&r!=="модель в пару"))missing.push("укажите «Кого ищу» из справочника");
- const moderation=moderate(Object.values(p).join("\n"));
- if(moderation.status!=="accept")missing.push("объявление не прошло автоматическую проверку: "+moderation.reason);
- if(/@\w{5,}|https?:\/\//.test(get(p,"описание")))missing.push("контакты нельзя вставлять в описание");
- if(get(p,"дата съёмки")&&jobExpiresAt(get(p,"дата съёмки")).getTime()<Date.now())missing.push("дата съёмки уже прошла");
- return [...new Set(missing)];
+ return validateJobListing(p);
 }
 async function profile(to,u,heading="Анкета",backToCatalog=null){
  if(!u.profile||!Object.keys(u.profile).length)return;
@@ -387,6 +379,7 @@ function demoMenu(){
   [["👤 Примеры анкет (10)","demo:profiles:0"],["📢 Примеры заявок (10)","demo:jobs:0"]],
   [["🎯 Фильтры","demo:filters"],["💌 Пример отклика","demo:response"]],
   [["✉️ Пример приглашения","demo:invite"]],
+  [["➕ Создать свою заявку","new"]],
   [["🏠 В главное меню","home"]]
  ]);
 }
@@ -419,6 +412,7 @@ async function demoScreen(id,screen="home"){
   if(item.id<10)nav.push(["Следующая ▶️","demo:"+(isProfile?"profile":"job")+":"+(item.id+1)]);
   if(nav.length)rows.push(nav);
   rows.push([[isProfile?"👥 Все 10 примеров анкет":"📢 Все 10 примеров заявок","demo:"+route.type+":"+Math.floor((item.id-1)/4)]]);
+  if(!isProfile)rows.push([["✋ Откликнуться","sample:reply:"+item.id]]);
   rows.push([["📚 К примерам","demo:home"],["🏠 Главное","home"]]);
   const body=isProfile
    ?"👤 <b>АНКЕТА-ПРИМЕР №"+item.id+"</b>\n\nИмя: "+esc(item.name)+"\nПрофессия: "+esc(item.role)+"\nВозраст: "+item.age+"\nГород: "+esc(item.city)+"\nНаправление: "+esc(item.special)+"\nФормат: "+esc(item.format)+"\nО себе: "+esc(item.about)
@@ -716,6 +710,11 @@ if(u.state==="browse_city"){
  if(u.state==="filter"){let p=parse(t);await change(id,{filters:{...(u.filters||{}),city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});await send(id,"Фильтры сохранены. Подбираю актуальные заявки.",menu);const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await queueProfileRefresh(sql,id);return showFilterMenu(fresh)}
 return begin(u)}
 async function onCallback(c){
+ if(c.data?.startsWith("sample:reply:")){
+  const sampleId=Number(c.data.slice("sample:reply:".length));
+  if(!Number.isSafeInteger(sampleId)||!demoItem("jobs",sampleId))return send(c.from.id,"Эта карточка-пример уже недоступна.");
+  return send(c.from.id,"Отправка откликов по карточкам-примерам пока недоступна. В этом сценарии показана будущая функция: отправка сообщения заказчику, решение по отклику и открытие переписки после принятия.",buttons([[["➕ Создать свою заявку","new"]],[["📢 К заявкам","jobs"],["🏠 В меню","home"]]]));
+ }
  if(c.data?.startsWith("demo:"))return demoScreen(c.from.id,c.data.slice(5));
  if(c.data==="docs")return send(c.from.id,"Документы сервиса: "+esc((Bun.env.PUBLIC_URL||"").replace(/\/$/,"")+"/documents"));
   if(c.data==="articles")return send(c.from.id,"📚 <b>Полезные материалы</b>\nВыберите тему:",buttons([...guideMenu().map(([title,key])=>[[title,key]]),[["◀️ В меню","home"]]]));
@@ -782,10 +781,26 @@ async function onCallback(c){
 if(a==="more")return send(id,"⚙️ <b>Дополнительно</b>\nИнформация о проекте, приватность и поддержка.",buttons([
  [["📚 Статьи","articles"],["🎁 Пригласить друга","invitefriend"]],
  [["🔐 Личные данные","privacy"],["❓ Поддержка","support"]],
+ [["🧩 Что уже работает","feature_status"]],
  [["💳 Доступ и подписка","access_info"],["🏠 В меню","home"]]
 ]));
  if(a==="how")return send(id,getGuide("getting-started").text,buttons([[["📚 Все материалы","articles"],["🏠 В меню","home"]]]));
- if(a==="access_info")return send(id,testMode()?"💳 <b>Доступ к сервису</b>\nАнкеты, заявки, отклики и приглашения сейчас доступны без оплаты. Подключение платёжных систем запланировано позже.":"Пробный и платный доступ проверяются по текущей подписке.");
+ if(a==="feature_status")return send(id,`🧩 <b>Что уже работает</b>
+
+✅ Анкета и фотографии
+✅ Создание и публикация заявок
+✅ Реальные отклики, решения по ним и переписка после принятия
+✅ Каталог, фильтры, жалобы и поддержка
+✅ Примеры анкет и заявок для просмотра
+
+<b>Подготовлено к подключению</b>
+📄 Юридические страницы показаны заглушками и не действуют как документы
+💳 Оплата и возвраты
+🪪 Проверка личности и представителя
+🔎 Автоматический сбор объявлений из источников
+
+Сейчас бот открыт в тестовом режиме. Перед публичным запуском нужно утвердить реальные документы и подключить необходимые интеграции.`,buttons([[['📄 Документы','docs'],['🏠 В меню','home']]]));
+  if(a==="access_info")return send(id,testMode()?"💳 <b>Доступ к сервису</b>\nАнкеты, заявки, отклики и приглашения сейчас доступны без оплаты. Подключение платёжных систем запланировано позже.":"Пробный и платный доступ проверяются по текущей подписке.");
  if(a==="myresponses"){
   const responses=await sql("SELECT r.id,r.job_id,r.status,r.created_at,j.body,j.owner FROM mm_responses r LEFT JOIN mm_jobs j ON j.id=r.job_id WHERE r.user_id=$1 ORDER BY r.created_at DESC LIMIT 15",id);
   if(!responses.length)return send(id,"Вы ещё не отправляли отклики.",buttons([[["📢 Найти заявки","jobs"],["🏠 В меню","home"]]]));

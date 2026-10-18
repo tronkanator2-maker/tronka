@@ -1,4 +1,4 @@
-import {ROLES} from "./engine.ts";
+import {ROLES,moderate,jobExpiresAt,field} from "./engine.ts";
 export const jobWizardFields=[
  {key:"название заявки",label:"Название съёмки или проекта",example:"Съёмка каталога одежды",required:true},
  {key:"кого ищу",label:"Кого вы ищете? Можно несколько профессий через запятую",example:"модель, фотограф",required:true},
@@ -41,4 +41,15 @@ export function clearJobWizard(filters){
  const result={...(filters||{})};
  delete result.jobWizardDraft;delete result.jobWizardStep;
  return result;
+}
+export function validateJobListing(profile){
+ const missing=["название заявки","кого ищу","тип работы","город","формат и оплата","описание"].filter(key=>!field(profile,key));
+ const title=field(profile,"название заявки"),sought=field(profile,"кого ищу").split(",").map(x=>x.trim().toLowerCase());
+ if(title.length>40)missing.push("название — максимум 40 символов");
+ if(!sought.length||sought.some(role=>!ROLES.includes(role)&&role!=="модель в пару"))missing.push("укажите «Кого ищу» из справочника");
+ const moderation=moderate(Object.values(profile||{}).join("\n"));
+ if(moderation.status!=="accept")missing.push("объявление не прошло автоматическую проверку: "+moderation.reason);
+ if(/@\w{5,}|https?:\/\//.test(field(profile,"описание")))missing.push("контакты нельзя вставлять в описание");
+ if(field(profile,"дата съёмки")&&jobExpiresAt(field(profile,"дата съёмки")).getTime()<Date.now())missing.push("дата съёмки уже прошла");
+ return [...new Set(missing)];
 }
