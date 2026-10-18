@@ -1,4 +1,4 @@
-FROM oven/bun:1.2
+FROM oven/bun:1.3
 WORKDIR /app
 COPY package.json bot.ts engine.ts admin.ts feedback.ts access.ts documents.ts ai-parser.ts privacy.ts pricing.ts source-health.ts visibility.ts test-mode.ts profile-wizard.ts profile-draft.ts relay.ts job-wizard.ts guides.ts deep-links.ts ./
 COPY tests ./tests
