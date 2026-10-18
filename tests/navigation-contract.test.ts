@@ -47,6 +47,8 @@ test("Telegram webhook durably queues messages and retries processing after fail
  expect(worker).toContain('await call("answerCallbackQuery"');
  expect(worker).toContain("INSERT INTO mm_updates(id)");
  expect(worker).toContain("Queued Telegram update failed");
+ expect(worker).toContain('typeof row.payload==="string"?JSON.parse(row.payload):row.payload');
+ expect(worker).toContain("Number.isSafeInteger(payload.update_id)");
  expect(worker).toContain("next_attempt_at=NOW()");
  expect(worker).toContain('console.error("Callback action failed"');
  expect(worker).toContain("Действие не завершилось из-за временной ошибки.");

@@ -1372,7 +1372,12 @@ async function processTelegramUpdateQueue(){
    if(!rows.length)break;
    const row=rows[0],started=Date.now();
    try{
-    await handleTelegramUpdate(row.payload);
+    // Bun may return a JSONB column as serialized JSON depending on the
+    // PostgreSQL driver/runtime version. Normalize it before dispatching so
+    // update_id and nested Telegram fields are available to the handler.
+    const payload=typeof row.payload==="string"?JSON.parse(row.payload):row.payload;
+    if(!payload||typeof payload!=="object"||!Number.isSafeInteger(payload.update_id))throw Error("Queued Telegram update payload is invalid");
+    await handleTelegramUpdate(payload);
     await sql("UPDATE mm_telegram_update_queue SET completed_at=NOW(),locked_until=NULL,payload='{}'::jsonb WHERE update_id=$1",row.update_id);
     const ms=Date.now()-started;if(ms>1800)console.warn("Telegram update processing slow",row.update_id,ms,"ms");
    }catch(e){
