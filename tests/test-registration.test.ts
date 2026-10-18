@@ -1,5 +1,5 @@
 import {test,expect} from "bun:test";
-import {isTestMode,canRegister,canUseTestFeatures,testWarning} from "../test-mode.ts";
+import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,testWarning} from "../test-mode.ts";
 import {parseFields,field} from "../engine.ts";
 
 const testEnv={REGISTRATION_ENABLED:"true",TEST_MODE:"true"};
@@ -13,7 +13,8 @@ test("test registration opens before legal documents are published, but only in 
 test("test consent is distinct from published legal consent",()=>{
  expect(canUseTestFeatures(testEnv,{})).toBe(false);
  expect(canUseTestFeatures(testEnv,{0:true,1:true,2:true})).toBe(false);
- expect(canUseTestFeatures(testEnv,{test_access:true})).toBe(true);
+ expect(canUseTestFeatures(testEnv,{test_access:true})).toBe(false);
+ expect(canUseTestFeatures(testEnv,{test_access:true,test_check_0:true,test_check_1:true,test_check_2:true})).toBe(true);
  expect(canUseTestFeatures(testEnv,{test_access:false})).toBe(false);
  expect(canUseTestFeatures({TEST_MODE:"false"},{test_access:true})).toBe(false);
  expect(testWarning).toContain("Добро пожаловать");
@@ -38,4 +39,22 @@ test("three separate onboarding acknowledgements are required",()=>{
  const flags={test_check_0:true,test_check_1:true,test_check_2:true};
  expect([0,1,2].every(i=>flags["test_check_"+i]===true)).toBe(true);
  for(const i of [0,1,2])expect([0,1,2].every(j=>({...flags,["test_check_"+i]:false})["test_check_"+j]===true)).toBe(false);
+});
+
+test("access is gated by all three test acknowledgements, not a stale approval flag",()=>{
+ const c={test_access:true,test_check_0:true,test_check_1:true,test_check_2:true};
+ expect(hasTestAcknowledgements(c)).toBe(true);
+ expect(canUseTestFeatures(testEnv,c)).toBe(true);
+ for(const i of [0,1,2]){
+  const partial={...c,["test_check_"+i]:false};
+  expect(hasTestAcknowledgements(partial)).toBe(false);
+  expect(canUseTestFeatures(testEnv,partial)).toBe(false);
+ }
+ expect(canUseTestFeatures(testEnv,{...c,test_access:false})).toBe(false);
+});
+test("support, privacy and cancellation work before registration",()=>{
+ for(const cmd of ["/support","/mydata","/deleteaccount","/cancel","/help","/id","/support hello"])
+  expect(isPreConsentCommand(cmd)).toBe(true);
+ for(const cmd of ["/start","/somewrongcommand","/supportevil","hi"])
+  expect(isPreConsentCommand(cmd)).toBe(false);
 });
