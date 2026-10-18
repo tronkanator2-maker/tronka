@@ -36,6 +36,8 @@ async function sql(q,...v){return db.unsafe(q,v)}
 async function setup(){
 await sql("CREATE TABLE IF NOT EXISTS mm_users(id BIGINT PRIMARY KEY, username TEXT, first_name TEXT, phone TEXT, consent JSONB DEFAULT '{}', state TEXT DEFAULT '', profile JSONB DEFAULT '{}', filters JSONB DEFAULT '{}', photo TEXT, active BOOLEAN DEFAULT TRUE, blocked BOOLEAN DEFAULT FALSE, created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("CREATE TABLE IF NOT EXISTS mm_jobs(id BIGSERIAL PRIMARY KEY,owner BIGINT NOT NULL,body JSONB NOT NULL,status TEXT DEFAULT 'active',created_at TIMESTAMPTZ DEFAULT NOW(),expires_at TIMESTAMPTZ DEFAULT NOW()+INTERVAL '14 days')");
+await sql("ALTER TABLE mm_jobs ADD COLUMN IF NOT EXISTS draft_token TEXT");
+await sql("CREATE UNIQUE INDEX IF NOT EXISTS mm_jobs_owner_draft_token ON mm_jobs(owner,draft_token) WHERE draft_token IS NOT NULL");
 await sql("CREATE TABLE IF NOT EXISTS mm_responses(id BIGSERIAL PRIMARY KEY,job_id BIGINT NOT NULL,user_id BIGINT NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),UNIQUE(job_id,user_id))");
 await sql("ALTER TABLE mm_responses ADD COLUMN IF NOT EXISTS message TEXT NOT NULL DEFAULT ''");
 await sql("CREATE TABLE IF NOT EXISTS mm_response_outbox(response_id BIGINT PRIMARY KEY,step INTEGER NOT NULL DEFAULT 0,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),completed_at TIMESTAMPTZ)");
@@ -484,7 +486,7 @@ async function finishJobWizard(u){
   await change(u.id,{state:"job"});
   return send(u.id,"Некоторые поля заявки требуют исправления:\n• "+esc(errors.join("\n• "))+"\n\nОтправьте заполненный шаблон заявки ещё раз.",buttons([[["📝 Открыть шаблон","job_template"],["❌ Отменить","jobwizard:cancel"]]]));
  }
- const filters={...clearJobWizard(u.filters),draft};
+ const filters={...clearJobWizard(u.filters),draft,draftToken:crypto.randomUUID()};
  await change(u.id,{state:"job_confirm",filters});
  return send(u.id,"📋 <b>Проверьте заявку</b>\n\n"+Object.entries(draft).map(([k,v])=>esc(k)+": "+esc(v)).join("\n")+"\n\nПосле публикации заявка появится в поиске.",buttons([[["✅ Опубликовать","publish"],["✏️ Исправить","job_template"]],[["❌ Отменить","jobwizard:cancel"]]]));
 }
@@ -547,7 +549,7 @@ async function onMessage(m){
    return send(m.from.id,testWarning,buttons([[["✅ Принять условия тестирования","test:agree"]],[["📄 Документы","docs"],["🎬 Демо","demo:home"]]]));
  }
  let u=await who(m.from),id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
- if(t==="/cancel"){const f=clearJobWizard(discardProfileDraft(u.filters));delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
+ if(t==="/cancel"){const f=clearJobWizard(discardProfileDraft(u.filters));delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftToken;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
  if(t==="/help")return send(id,"ℹ️ <b>Мир моделей</b>\n/start — главное меню\n/demo — попробовать без анкеты\n/cancel — отмена текущего действия\n/mydata — экспорт своих данных\n/deleteaccount — удалить аккаунт\n\n🧪 Сейчас включён тестовый режим. Используйте вымышленные данные.",buttons([[["👤 Моя анкета","profile"],["ℹ️ Как работает","how"]],[["🏠 В меню","home"]]]));
  if(t==="/teststatus")return send(id,testMode()?"🧪 Тестовый режим активен. Регистрация открыта: "+(testReady()?"да":"нет")+"\nПлатежи отключены.\nТелефон не требуется.":"Тестовый режим выключен.");if(t==="/mydata"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Данных нет.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Не получилось отправить архив. Попробуйте позже.");return;}
  if(t==="/deleteaccount"){await change(id,{state:"delete_confirm"});return send(id,"<b>Удалить аккаунт и данные?</b>\nЭто удалит анкету, фотографии из нашей базы, ваши заявки, историю откликов, отзывов, приглашений, согласий и обращений. Сообщения, ранее отправленные другим пользователям Telegram, стереть удалённо нельзя.\n\nПодтвердите удаление отдельной кнопкой.",buttons([[["❌ Удалить мои данные","deleteaccount:confirm"]],[["Отмена","deleteaccount:cancel"]]]));}if(t==="/subscription"&&testMode())return send(id,"🧪 Тестовый доступ: лимиты заявок, откликов и приглашений для проверки сняты. Настоящие платежи выключены.");if(t==="/subscription")return send(id,hasPaidAccess(u)?"⭐ Подписка или пробный период активны до "+esc(new Date(u.access_until&&new Date(u.access_until)>new Date(u.trial_until||0)?u.access_until:u.trial_until).toLocaleDateString("ru-RU")):"Бесплатный доступ: один отклик, одна заявка и одно приглашение в календарную неделю.");if(t.startsWith("/start")){
@@ -633,7 +635,7 @@ if(u.state==="job_edit"){
  await change(id,{filters:{...(u.filters||{}),draft},state:"job_edit_confirm"});
  return send(id,"<b>Проверьте изменения заявки №"+originalId+"</b>\n"+esc(t),buttons([[["✅ Сохранить изменения","updatejob:"+originalId],["✏️ Изменить","jobedit:"+originalId]]]));
 }
-if(u.state==="job"){let p=parse(t),errors=validJob(p);if(errors.length)return send(id,"Исправьте заявку:\n• "+esc(errors.join("\n• ")));await change(id,{filters:{...(u.filters||{}),draft:p},state:"job_confirm"});return send(id,"Предпросмотр:\n"+esc(t),buttons([[["✅ Опубликовать","publish"],["✏️ Исправить","job_template"]]]))}
+if(u.state==="job"){let p=parse(t),errors=validJob(p);if(errors.length)return send(id,"Исправьте заявку:\n• "+esc(errors.join("\n• ")));await change(id,{filters:{...(u.filters||{}),draft:p,draftToken:crypto.randomUUID()},state:"job_confirm"});return send(id,"Предпросмотр:\n"+esc(t),buttons([[["✅ Опубликовать","publish"],["✏️ Исправить","job_template"]]]))}
 if(u.state==="browse_city"){
   const city=t.trim().toLowerCase()==="все"?"":t.trim().slice(0,80);
   const filters={...(u.filters||{}),profileCity:city};
@@ -872,7 +874,7 @@ if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправ
   return jobWizardPrompt(u);
  }
  if(a==="jobwizard:cancel"){
-  const filters={...clearJobWizard(u.filters)};delete filters.draft;
+  const filters={...clearJobWizard(u.filters)};delete filters.draft;delete filters.draftToken;
   await change(id,{state:"",filters});
   return send(id,"Черновик заявки удалён. Ничего не опубликовано.",buttons([[["➕ Новая заявка","new"],["🏠 В меню","home"]]]));
  }
@@ -885,7 +887,15 @@ if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправ
   await change(id,{filters});
   const current={...u,filters};
   return jobWizardFinished(filters.jobWizardStep)?finishJobWizard(current):jobWizardPrompt(current);
- }if(a==="publish"){let p=u.filters?.draft;if(u.state!=="job_confirm"||!p)return send(id,"Сначала проверьте и подтвердите актуальную версию заявки.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].total)return send(id,"Без подписки можно разместить одну новую заявку с понедельника по воскресенье.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const row=(await sql("INSERT INTO mm_jobs(owner,body,expires_at) VALUES($1,$2::jsonb,$3) RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString()))[0];await change(id,{state:"",filters:Object.fromEntries(Object.entries(u.filters).filter(([k])=>k!=="draft"))});await send(id,"Заявка №"+row.id+" опубликована.");await dispatch(row);return}if(a==="jobs"){
+ }if(a==="publish"){let p=u.filters?.draft;if(u.state!=="job_confirm"||!p)return send(id,"Сначала проверьте и подтвердите актуальную версию заявки.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].total)return send(id,"Без подписки можно разместить одну новую заявку с понедельника по воскресенье.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const token=u.filters?.draftToken||("legacy:"+id+":"+Bun.hash(JSON.stringify(p)).toString(36));
+ const saved=await sql("INSERT INTO mm_jobs(owner,body,expires_at,draft_token) VALUES($1,$2::jsonb,$3,$4) ON CONFLICT DO NOTHING RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString(),token);
+ if(!saved.length){
+  const already=(await sql("SELECT id FROM mm_jobs WHERE owner=$1 AND draft_token=$2",id,token))[0];
+  return send(id,already?"Заявка №"+already.id+" уже опубликована. Вторую копию не создаём.":"Заявка уже обрабатывается. Проверьте «Мои заявки».");
+ }
+ const row=saved[0],filters={...(u.filters||{})};delete filters.draft;delete filters.draftToken;
+ await change(id,{state:"",filters});
+ await send(id,"✅ Заявка №"+row.id+" опубликована.");await dispatch(row);return}if(a==="jobs"){
  const hasProfile=eligibleProfile(u.profile,u.photo);
  let js;
  if(hasProfile){
