@@ -1,5 +1,5 @@
 import {SQL} from "bun";
-import {parseStartTarget,parseOnboardTarget} from "./deep-links.ts";
+import {parseStartTarget,parseOnboardTarget,parseReferralStart,parseReferralOnboard,safeRegistrationTarget} from "./deep-links.ts";
 import {getGuide,guideMenu} from "./guides.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
@@ -102,7 +102,9 @@ const consentEditQueue=createConsentEditQueue();
 const testConsentComplete=hasTestAcknowledgements;
 const testConsentBoard=u=>{
  const c=u?.consent||{};
- return buttons([...["Условия участия","Обработка введённых данных","Публикация анкеты"].map((label,i)=>[[(c["test_check_"+i]===true?"✅ ":"☐ ")+label,"test:consent:"+i]]),[["📖 Описание пунктов","test:docs"]],...(testConsentComplete(c)?[[["✨ Продолжить","test:agree"]]]:[])]);
+ const target=safeRegistrationTarget(u?.filters?.pendingStartTarget);
+ const next=target?"onboard:"+target:"test:agree";
+ return buttons([...["Условия участия","Обработка введённых данных","Публикация анкеты"].map((label,i)=>[[(c["test_check_"+i]===true?"✅ ":"☐ ")+label,"test:consent:"+i]]),[["📖 Описание пунктов","test:docs"]],...(testConsentComplete(c)?[[["✨ Продолжить",next]]:[])]);
 };
 const testConsentDetails="Перед началом:\n\n1. Участие добровольное, с 18 лет.\n2. Сервис сохраняет введённые данные для работы анкет и заявок. Не указывайте конфиденциальные сведения и реальные документы.\n3. После публикации анкету смогут увидеть другие участники.\n\nОтозвать разрешение и удалить сведения можно в разделе «Личные данные». Эти пояснения не заменяют утверждённые юридические документы.";
 let cachedDocHashes=null,cachedDocHashesUntil=0;
@@ -558,8 +560,15 @@ async function onMessage(m){
   return send(m.from.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации документов и проверки интеграций. Пока можно посмотреть демонстрацию.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));
  }
  let u=await who(m.from);
- if(testMode()&&testReady()&&!canUseTestFeatures(Bun.env,u.consent)&&!isPreConsentMessageAllowed(text,u.state))
-  return send(u.id,"✨ <b>Добро пожаловать в «Мир моделей»!</b>\nПрочитайте три пункта и отметьте каждый перед началом.",testConsentBoard(u));
+ if(testMode()&&testReady()&&!canUseTestFeatures(Bun.env,u.consent)){
+  const startTarget=parseStartTarget(text)||parseReferralStart(text);
+  if(startTarget){
+   await sql("UPDATE mm_users SET filters=jsonb_set(COALESCE(filters,'{}'::jsonb),'{pendingStartTarget}',to_jsonb($2::text),TRUE) WHERE id=$1",u.id,startTarget.callback);
+   u={...u,filters:{...(u.filters||{}),pendingStartTarget:startTarget.callback}};
+  }
+  if(!isPreConsentMessageAllowed(text,u.state))
+   return send(u.id,"✨ <b>Добро пожаловать в «Мир моделей»!</b>\nПрочитайте три пункта и отметьте каждый перед началом.",testConsentBoard(u));
+ }
  let id=u.id,t=m.text||"";if(await adminAction(u,t))return;if(t==="/demo")return demoScreen(id);if(t==="/id")return send(id,"Telegram ID: <code>"+id+"</code>");
  if(t==="/cancel"){const f=clearJobWizard(discardProfileDraft(u.filters));delete f.replyJobId;delete f.relayPeer;delete f.draft;delete f.draftToken;delete f.draftJobId;await change(id,{state:"",filters:f});return send(id,"Действие отменено. Несохранённые изменения сброшены. Вернуться в меню: /start");}
  if(t==="/help")return send(id,"ℹ️ <b>Мир моделей</b>\n/start — главное меню\n/demo — попробовать без анкеты\n/cancel — отмена текущего действия\n/mydata — экспорт своих данных\n/deleteaccount — удалить аккаунт\n\nЛичные данные можно посмотреть или удалить через /mydata и /deleteaccount.",buttons([[["👤 Моя анкета","profile"],["ℹ️ Как работает","how"]],[["🏠 В меню","home"]]]));
@@ -567,13 +576,7 @@ async function onMessage(m){
  if(t==="/deleteaccount"){await change(id,{state:"delete_confirm"});return send(id,"<b>Удалить аккаунт и данные?</b>\nЭто удалит анкету, фотографии из нашей базы, ваши заявки, историю откликов, отзывов, приглашений, согласий и обращений. Сообщения, ранее отправленные другим пользователям Telegram, стереть удалённо нельзя.\n\nПодтвердите удаление отдельной кнопкой.",buttons([[["❌ Удалить мои данные","deleteaccount:confirm"]],[["Отмена","deleteaccount:cancel"]]]));}if(t==="/subscription"&&testMode())return send(id,"💳 Сейчас все основные возможности доступны бесплатно. Оформление подписки появится после подключения оплаты.");if(t==="/subscription")return send(id,hasPaidAccess(u)?"⭐ Подписка или пробный период активны до "+esc(new Date(u.access_until&&new Date(u.access_until)>new Date(u.trial_until||0)?u.access_until:u.trial_until).toLocaleDateString("ru-RU")):"Бесплатный доступ: один отклик, одна заявка и одно приглашение в календарную неделю.");if(t.startsWith("/start")){
  if(u.state==="relay"){const filters={...(u.filters||{})};delete filters.relayPeer;await change(id,{state:"",filters});u={...u,state:"",filters};}
  const payload=t.trim().split(/\s+/)[1]||"";
- if(/^ref_\d{2,19}$/.test(payload)){
-  const inviter=Number(payload.slice(4));
-  if(Number.isSafeInteger(inviter)&&inviter!==id){
-   const hasInviter=await sql("SELECT id FROM mm_users WHERE id=$1",inviter);
-   if(hasInviter.length)await sql("INSERT INTO mm_referrals(inviter,invitee) VALUES($1,$2) ON CONFLICT(invitee) DO NOTHING",inviter,id);
-  }
- }
+ // A referral is recorded only after first completed onboarding, not by a later /start.
  if(/^job_\d+$/.test(payload)&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&(testMode()||u.phone)&&allConsentsCurrent(u.consent,await currentDocumentHashes())){
   const j=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",Number(payload.slice(4))))[0];
   if(j){await card(id,j);return begin(u)}
@@ -677,7 +680,7 @@ async function onCallback(c){
   return consentEditQueue(id,async()=>{
    const toggled=await toggleTestAcknowledgement(sql,id,n);
    if(!toggled)return send(id,"Не удалось найти регистрацию. Отправьте /start.");
-   const markup=testConsentBoard({consent:toggled.consent});
+   const markup=testConsentBoard({...u,consent:toggled.consent});
    if(!c.message?.message_id)return send(id,"Отметки сохранены.",markup);
    // The database update must not be undone by Telegram retrying a slow markup edit.
    try{
@@ -698,7 +701,21 @@ async function onCallback(c){
   const accepted=await activateTestAccess(sql,id);
   if(!accepted)return send(id,"Отметьте все три пункта, чтобы продолжить.",testConsentBoard(u));
   u={...u,consent:accepted.consent,active:true};
-  a=requestedAction.startsWith("onboard:")?requestedAction.slice(8):"home";
+  // Old test:agree messages also recover the saved destination.
+  const pending=safeRegistrationTarget(u.filters?.pendingStartTarget);
+  a=requestedAction.startsWith("onboard:")?requestedAction.slice(8):(pending||"home");
+  if(u.filters?.pendingStartTarget){
+   await sql("UPDATE mm_users SET filters=COALESCE(filters,'{}'::jsonb)-'pendingStartTarget' WHERE id=$1",id);
+   const filters={...(u.filters||{})};delete filters.pendingStartTarget;u={...u,filters};
+  }
+  const referral=parseReferralOnboard(a);
+  if(referral){
+   if(referral.id!==id){
+    const inviter=(await sql("SELECT id FROM mm_users WHERE id=$1",referral.id))[0];
+    if(inviter)await sql("INSERT INTO mm_referrals(inviter,invitee) VALUES($1,$2) ON CONFLICT(invitee) DO NOTHING",referral.id,id);
+   }
+   return begin(u);
+  }
   if(a==="home")return begin(u);
  }
  if(testMode()&&!canUseTestFeatures(Bun.env,u.consent)&&!isPreConsentCallback(a))
