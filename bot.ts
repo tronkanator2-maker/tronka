@@ -5,7 +5,7 @@ import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
 import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
 import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer,toggleProfileRole,canFinishWizardNow} from "./profile-wizard.ts";
-import {isTestMode,canRegister,canUseTestFeatures,testWarning,testMenuText} from "./test-mode.ts";
+import {isTestMode,canRegister,canUseTestFeatures,hasTestAcknowledgements,isPreConsentCommand,testWarning,testMenuText} from "./test-mode.ts";
 import {redactContacts,publicProfileEntries,publicProfileAllowed} from "./visibility.ts";
 import {adminApp} from "./admin.ts";
 import {setupSourceHealth,allowanceForModel,reviewSourceHealth} from "./source-health.ts";
@@ -98,7 +98,7 @@ const buttons=rows=>({inline_keyboard:rows.map(row=>row.map(([text,callback_data
 async function change(id,fields){let sets=[],vals=[];for(const [k,v] of Object.entries(fields)){const json=v!==null&&typeof v==="object";vals.push(json?JSON.stringify(v):v);sets.push(k+"=$"+vals.length+(json?"::jsonb":""));}vals.push(id);await sql("UPDATE mm_users SET "+sets.join(",")+" WHERE id=$"+vals.length,...vals)}
 async function who(f){await sql("INSERT INTO mm_users(id,username,first_name) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name",f.id,f.username||null,f.first_name||"");return(await sql("SELECT * FROM mm_users WHERE id=$1",f.id))[0]}
 const consentNames=["Оферта и правила сервиса","Обработка персональных данных","Показ анкеты другим"];
-const testConsentComplete=c=>[0,1,2].every(i=>c?.["test_check_"+i]===true);
+const testConsentComplete=hasTestAcknowledgements;
 const testConsentBoard=u=>{
  const c=u?.consent||{};
  return buttons([...["Условия участия","Обработка введённых данных","Публикация анкеты"].map((label,i)=>[[(c["test_check_"+i]===true?"✅ ":"☐ ")+label,"test:consent:"+i]]),[["📖 Описание пунктов","test:docs"]],...(testConsentComplete(c)?[[["✨ Продолжить","test:agree"]]]:[])]);
@@ -557,7 +557,7 @@ async function onMessage(m){
  }
  if(testMode()&&testReady()){
   const existing=(await sql("SELECT consent FROM mm_users WHERE id=$1",m.from.id))[0];
-  const personalControl=!!existing&&/^\/(?:mydata|deleteaccount|support|cancel|help)(?:\s|$)/.test(text);
+  const personalControl=isPreConsentCommand(text);
   if(!canUseTestFeatures(Bun.env,existing?.consent)&&!personalControl)
    return send(m.from.id,"✨ <b>Добро пожаловать в «Мир моделей»!</b>\nПрочитайте три пункта и отметьте каждый перед началом.",testConsentBoard(existing));
  }
