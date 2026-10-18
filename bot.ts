@@ -58,6 +58,7 @@ await sql("CREATE TABLE IF NOT EXISTS mm_reports_v2(id BIGSERIAL PRIMARY KEY,rep
 await sql("CREATE TABLE IF NOT EXISTS mm_profile_deliveries(job_id BIGINT NOT NULL,user_id BIGINT NOT NULL,created_at TIMESTAMPTZ DEFAULT NOW(),PRIMARY KEY(job_id,user_id))");
 await sql("CREATE TABLE IF NOT EXISTS mm_invitations(id BIGSERIAL PRIMARY KEY,from_user BIGINT NOT NULL,to_user BIGINT NOT NULL,job_id BIGINT,status TEXT DEFAULT 'sent',created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("ALTER TABLE mm_users ADD COLUMN IF NOT EXISTS first_safety_sent_at TIMESTAMPTZ");
+ await sql("ALTER TABLE mm_users ADD COLUMN IF NOT EXISTS first_reply_ack_at TIMESTAMPTZ");
 await sql("CREATE TABLE IF NOT EXISTS mm_admin_log(id BIGSERIAL PRIMARY KEY,actor BIGINT NOT NULL,action TEXT NOT NULL,details JSONB DEFAULT '{}',created_at TIMESTAMPTZ DEFAULT NOW())");
 await sql("ALTER TABLE mm_jobs ADD COLUMN IF NOT EXISTS source_id BIGINT");
 await sql("ALTER TABLE mm_jobs ADD COLUMN IF NOT EXISTS contact TEXT");
@@ -946,12 +947,20 @@ if(a.startsWith("jobpause:")){const rows=await sql("UPDATE mm_jobs SET paused=NO
   await change(id,{filters});return showFilterMenu({...u,filters});
  }
  if(a==="filters")return showFilterMenu(u);
-if(a==="editfilters"){await change(id,{state:"filter"});return send(id,"Отправьте фильтры отдельным сообщением:\n<code>Город: Москва\nТип работы: реклама\nФормат: коммерция</code>\nЕсли строку оставить пустой, ограничение по ней отключится.")}if(a==="pause"){await change(id,{active:!u.active});if(!u.active)await backfill({...u,active:true});return send(id,u.active?"Поиск приостановлен. Анкета скрыта.":"Поиск возобновлён.")}if(a.startsWith("reply:")){
+if(a==="editfilters"){await change(id,{state:"filter"});return send(id,"Отправьте фильтры отдельным сообщением:\n<code>Город: Москва\nТип работы: реклама\nФормат: коммерция</code>\nЕсли строку оставить пустой, ограничение по ней отключится.")}if(a==="pause"){await change(id,{active:!u.active});if(!u.active)await backfill({...u,active:true});return send(id,u.active?"Поиск приостановлен. Анкета скрыта.":"Поиск возобновлён.")}if(a.startsWith("replyack:")){
+ const jobId=Number(a.slice("replyack:".length));
+ if(!Number.isSafeInteger(jobId)||jobId<=0)return send(id,"Номер заявки не найден.");
+ await sql("UPDATE mm_users SET first_reply_ack_at=COALESCE(first_reply_ack_at,NOW()) WHERE id=$1",id);
+ u={...u,first_reply_ack_at:new Date()};
+ a="reply:"+jobId;
+}
+ if(a.startsWith("reply:")){
  const jobId=Number(a.slice(6));
  if(!Number.isSafeInteger(jobId)||jobId<=0)return send(id,"Некорректный номер заявки.");
  const job=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",jobId))[0];
  if(!job)return send(id,"Поиск по заявке остановлен или заявка устарела.");
  if(!eligibleProfile(u.profile,u.photo))return send(id,"Для отклика заполните обязательные поля анкеты и добавьте главное фото.");
+ if(!u.first_reply_ack_at)return send(id,"🛡 <b>Перед первым откликом</b>\n«Мир моделей» помогает найти исполнителей и съёмки, но не организует сделки, не проверяет условия и не участвует в расчётах. Сервис не гарантирует достоверность сведений об участниках: решение встретиться, передать деньги или материалы принимаете вы.\n\nПеред съёмкой уточните условия, не отправляйте незнакомым предоплату и прочитайте памятку о безопасности. О подозрительных предложениях сообщайте в поддержку.",buttons([[["✅ Понятно, продолжить","replyack:"+jobId]],[["📚 Памятка","articles"],["❌ Отмена","home"]]]));
  if(job.owner===id)return send(id,"Нельзя откликнуться на собственную заявку.");
  const duplicate=await sql("SELECT id FROM mm_responses WHERE job_id=$1 AND user_id=$2",jobId,id);
  if(duplicate.length)return send(id,"Вы уже откликались на эту заявку.");
