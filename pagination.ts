@@ -8,9 +8,9 @@ export function parsePageOffset(action,route,size=5,maxOffset=100){
  const offset=Number(raw);
  return Number.isSafeInteger(offset)&&offset<=maxOffset&&offset%size===0?offset:null;
 }
-export function pageNavigation(route,offset,hasMore,size=5){
+export function pageNavigation(route,offset,hasMore,size=5,maxOffset=100){
  const actions=[];
  if(offset>0)actions.push(["◀️ Назад",route+":"+Math.max(0,offset-size)]);
- if(hasMore)actions.push(["Дальше ▶️",route+":"+(offset+size)]);
+ if(hasMore&&offset+size<=maxOffset)actions.push(["Дальше ▶️",route+":"+(offset+size)]);
  return actions;
 }
