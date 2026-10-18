@@ -27,7 +27,7 @@ export async function queueProfileRefresh(sql,id){
 }
 export async function runProfileRefreshBatch(sql,sendMatchedProfile,deliverTo,allowed,limit=5){
  if(!Number.isInteger(limit)||limit<1||limit>10)throw Error("Invalid profile refresh batch size");
- const rows=await sql(`SELECT q.*,u.id AS actor_id,u.active,u.blocked,u.suspended,u.photo,u.profile,u.consent
+ const rows=await sql(`SELECT q.*,u.*
  FROM mm_profile_refresh_queue q JOIN mm_users u ON u.id=q.user_id
  WHERE q.pending=TRUE AND q.next_attempt_at<=NOW()
  ORDER BY q.next_attempt_at LIMIT 1`);
