@@ -16,7 +16,9 @@ test("test consent is distinct from published legal consent",()=>{
  expect(canUseTestFeatures(testEnv,{test_access:true})).toBe(true);
  expect(canUseTestFeatures(testEnv,{test_access:false})).toBe(false);
  expect(canUseTestFeatures({TEST_MODE:"false"},{test_access:true})).toBe(false);
- expect(testWarning).toContain("ТЕСТОВЫЙ РЕЖИМ");
+ expect(testWarning).toContain("Добро пожаловать");
+ expect(testWarning).toContain("разрешаете сервису сохранять");
+ expect(testWarning).not.toContain("ТЕСТОВЫЙ РЕЖИМ");
 });
 test("copied instructions in model template do not become profile fields",()=>{
  const input="Заполните анкету:\nСкопируйте шаблон и отправьте:\nПсевдоним: Анна\nДата рождения: 12.09.2002\nГород: Москва, Коломна\nПол: женский\nРост: 172\nПараметры: 86-61-90\nРазмер одежды: 42-44\nПрайс: 3000 RUB/час\nФормат: ТФП, коммерция\nПортфолио: https://disk.yandex.ru/d/example";
