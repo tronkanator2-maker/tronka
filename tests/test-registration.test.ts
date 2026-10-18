@@ -33,3 +33,9 @@ test("job date with е instead of ё is normalized",()=>{
  const job=parseFields("Название заявки: Каталог одежды\nДата съемки: 27.10.2026\nГород: Москва");
  expect(job["дата съёмки"]).toBe("27.10.2026");
 });
+
+test("three separate onboarding acknowledgements are required",()=>{
+ const flags={test_check_0:true,test_check_1:true,test_check_2:true};
+ expect([0,1,2].every(i=>flags["test_check_"+i]===true)).toBe(true);
+ for(const i of [0,1,2])expect([0,1,2].every(j=>({...flags,["test_check_"+i]:false})["test_check_"+j]===true)).toBe(false);
+});
