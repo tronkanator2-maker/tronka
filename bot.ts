@@ -3,6 +3,7 @@ import {parseStartTarget,parseOnboardTarget,parseReferralStart,parseReferralOnbo
 import {leavingToHome} from "./navigation-state.ts";
 import {prepareAcceptedResponseOutbox,acceptResponseForOwner,deliverAcceptedResponses} from "./response-acceptance.ts";
 import {prepareAcceptedInvitationOutbox,acceptInvitationForRecipient,deliverAcceptedInvitations} from "./invite-acceptance.ts";
+import {prepareInvitationOutbox,queueInitialInvitation,deliverPendingInvitations} from "./invitation-delivery.ts";
 import {parsePageOffset,pageNavigation} from "./pagination.ts";
 import {getGuide,guideMenu} from "./guides.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard} from "./job-wizard.ts";
@@ -89,6 +90,7 @@ await prepareEntitlements(sql);
 await prepareRelay(sql);
 await prepareAcceptedResponseOutbox(sql);
 await prepareAcceptedInvitationOutbox(sql);
+await prepareInvitationOutbox(sql);
 await prepareDocuments(sql);
 await setupSourceHealth(sql);
 
@@ -1091,33 +1093,26 @@ if(a==="editfilters"){await change(id,{state:"filter"});return send(id,"Отпр
  return send(id,"✉️ <b>Отклик на заявку №"+jobId+"</b>\nНапишите своё сообщение заказчику одним текстом: уточните интересующие детали или укажите кодовое слово из заявки.\n\nТекст будет отправлен заказчику, а сам отклик засчитается только после отправки. Для отмены — /cancel.");
 }
 if(a.startsWith("invite:")){
- const target=Number(a.slice(7));
- if(!Number.isSafeInteger(target)||target<=0||target===id)return send(id,"Некорректный получатель приглашения.");
- const hashes=await currentDocumentHashes();
- if(!publicProfileAllowed(u,hashes,allConsentsCurrent,eligibleProfile))return send(id,"Чтобы отправлять приглашения, сначала завершите анкету и добавьте главное фото.");
- const p=(await sql("SELECT * FROM mm_users WHERE id=$1",target))[0];
- if(!publicProfileAllowed(p,hashes,allConsentsCurrent,eligibleProfile))return send(id,"Этот участник сейчас недоступен для приглашений.");
- const duplicate=(await sql("SELECT id FROM mm_invitations WHERE from_user=$1 AND to_user=$2 AND status IN ('sent','accepted') ORDER BY id DESC LIMIT 1",id,target))[0];
- if(duplicate)return send(id,"Вы уже отправляли приглашение этому участнику.");
- const count=await sql("SELECT COUNT(*)::int n FROM mm_invitations WHERE from_user=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());
- if(!hasPaidAccess(u)&&count[0].n>=1)return send(id,"Без подписки доступно одно приглашение с понедельника по воскресенье.");
- const invited=(await sql("INSERT INTO mm_invitations(from_user,to_user) VALUES($1,$2) RETURNING id",id,target))[0];
- try{
-  const notification=await send(p.id,"👋 Вам пришло приглашение на сотрудничество.");
-  if(!notification?.ok)throw Error("Telegram could not deliver invitation");
-  await profile(p.id,u,"Анкета приглашающего участника");
-  const controls=await send(p.id,"Вы можете принять приглашение или отказаться. До принятия контакты обеих сторон скрыты.",buttons([[["✅ Принять","acceptinvite:"+invited.id],["❌ Отклонить","rejectinvite:"+invited.id]]]));
-  if(!controls?.ok)throw Error("Telegram could not deliver invitation controls");
- }catch(err){
-  await sql("DELETE FROM mm_invitations WHERE id=$1 AND status='sent'",invited.id);
-  console.error("Invitation delivery failed",String(err));
-  return send(id,"Не получилось доставить приглашение. Попробуйте позже.");
+  const target=Number(a.slice("invite:".length));
+  if(!Number.isSafeInteger(target)||target<=0||target===id)return send(id,"Некорректный получатель приглашения.");
+  const hashes=await currentDocumentHashes();
+  if(!publicProfileAllowed(u,hashes,allConsentsCurrent,eligibleProfile))
+   return send(id,"Чтобы отправлять приглашения, сначала завершите анкету и добавьте главное фото.");
+  const peer=(await sql("SELECT * FROM mm_users WHERE id=$1",target))[0];
+  if(!publicProfileAllowed(peer,hashes,allConsentsCurrent,eligibleProfile))
+   return send(id,"Этот участник сейчас недоступен для приглашений.");
+  const duplicate=(await sql("SELECT id FROM mm_invitations WHERE from_user=$1 AND to_user=$2 AND status IN ('sent','accepted') ORDER BY id DESC LIMIT 1",id,target))[0];
+  if(duplicate){
+   await queueInitialInvitation(sql,duplicate.id);
+   return send(id,"Приглашение этому участнику уже есть. Если оно ещё не доставлено, бот повторит отправку.",buttons([[["✉️ Мои приглашения","myinvites"],["🏠 В меню","home"]]]));
+  }
+  const count=await sql("SELECT COUNT(*)::int n FROM mm_invitations WHERE from_user=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());
+  if(!hasPaidAccess(u)&&count[0].n>=1)return send(id,"Без подписки доступно одно приглашение с понедельника по воскресенье.");
+  const invited=(await sql("INSERT INTO mm_invitations(from_user,to_user) VALUES($1,$2) RETURNING id",id,target))[0];
+  await queueInitialInvitation(sql,invited.id);
+  return send(id,"✅ Приглашение №"+invited.id+" сохранено и поставлено в очередь. Бот отправит анкету и кнопки принятия/отклонения.",buttons([[["✉️ Мои приглашения","myinvites"],["🏠 В меню","home"]]]));
  }
- await send(id,"✅ Приглашение отправлено. Контакты откроются обеим сторонам после принятия.");
- await safetyOnce(p);
- return;
-}
-if(a.startsWith("rejectinvite:")){
+ if(a.startsWith("rejectinvite:")){
  const invitationId=Number(a.slice("rejectinvite:".length));
  const rows=await sql("UPDATE mm_invitations SET status='declined' WHERE id=$1 AND to_user=$2 AND status='sent' RETURNING from_user",invitationId,id);
  if(!rows.length)return send(id,"Приглашение уже обработано.");
@@ -1298,6 +1293,20 @@ async function saveReport(u,txt,photo=null){
  await send(u.id,"Обращение записано. Модератор сможет его проверить.");
 }
 
+let initialInvitationWorkerRunning=false;
+async function processInvitationOutbox(){
+ if(initialInvitationWorkerRunning)return;
+ initialInvitationWorkerRunning=true;
+ try{
+  await ensure();
+  await deliverPendingInvitations(sql,send,profile,async(sender,recipient)=>{
+   const hashes=await currentDocumentHashes();
+   return publicProfileAllowed(sender,hashes,allConsentsCurrent,eligibleProfile) &&
+    publicProfileAllowed(recipient,hashes,allConsentsCurrent,eligibleProfile);
+  },safetyOnce);
+ }finally{initialInvitationWorkerRunning=false}
+}
+
 let acceptedInvitationWorkerRunning=false;
 async function processAcceptedInvitationOutbox(){
  if(acceptedInvitationWorkerRunning)return;
@@ -1339,6 +1348,7 @@ setInterval(()=>runFanoutBatch().catch(e=>console.error("fanout tick",String(e))
 setInterval(()=>processResponseOutbox().catch(e=>console.error("response outbox tick",String(e))),5000);
 setInterval(()=>processAcceptedResponseOutbox().catch(e=>console.error("accepted response outbox tick",String(e))),5000);
 setInterval(()=>processAcceptedInvitationOutbox().catch(e=>console.error("accepted invitation outbox tick",String(e))),5000);
+setInterval(()=>processInvitationOutbox().catch(e=>console.error("initial invitation outbox tick",String(e))),5000);
 setInterval(()=>consumeCollectorInbox().catch(e=>console.error("collector inbox",String(e))),5000);
 setInterval(()=>ensure().then(()=>reviewSourceHealth(sql)).catch(e=>console.error("source health",String(e))),24*60*60*1000);
 setInterval(()=>ensure().then(async()=>{
@@ -1349,6 +1359,7 @@ setInterval(()=>ensure().then(async()=>{
 setTimeout(()=>runFanoutBatch().catch(e=>console.error("fanout startup",String(e))),4000);
 setTimeout(()=>processAcceptedResponseOutbox().catch(e=>console.error("accepted response startup",String(e))),7000);
 setTimeout(()=>processAcceptedInvitationOutbox().catch(e=>console.error("accepted invitation startup",String(e))),7500);
+setTimeout(()=>processInvitationOutbox().catch(e=>console.error("initial invitation startup",String(e))),8000);
 if(token&&secret&&Bun.env.PUBLIC_URL)(async()=>{
  const me=await call("getMe",{});
  if(!me.ok){console.error("Telegram token failed getMe validation");return}
