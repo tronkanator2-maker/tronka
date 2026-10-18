@@ -2,8 +2,12 @@
 export const isTestMode = env => env.TEST_MODE==="true";
 export const canRegister = (env,hasApprovedLegalDocs) =>
  env.REGISTRATION_ENABLED==="true" && (isTestMode(env)||hasApprovedLegalDocs);
+export const hasTestAcknowledgements = consent =>
+ [0,1,2].every(i=>consent?.["test_check_"+i]===true);
 export const canUseTestFeatures = (env,consent) =>
- isTestMode(env) && consent?.test_access===true;
+ isTestMode(env) && consent?.test_access===true && hasTestAcknowledgements(consent);
+export const isPreConsentCommand = text =>
+ /^\/(?:mydata|deleteaccount|support|cancel|help|id)(?:\s|$)/.test(String(text||""));
 export const testWarning =
  "✨ <b>Добро пожаловать в «Мир моделей»!</b>\n" +
  "Здесь можно создать анкету, найти съёмку, разместить заявку и связаться с участниками.\n\n"+
