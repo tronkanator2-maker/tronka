@@ -543,6 +543,7 @@ async function onMessage(m){
  if(m.chat?.type&&m.chat.type!=="private"){await onSourcePost(m);return}
  const text=String(m.text||"");
  if(text==="/demo")return demoScreen(m.from.id);
+  if(text==="/help")return send(m.from.id,getGuide("getting-started").text,buttons([[["📚 Другие материалы","articles"],["✨ Начать","onboard:home"]]]));
  if(text==="/id")return send(m.from.id,"Telegram ID: <code>"+m.from.id+"</code>");
  if(text.startsWith("/start")&&(Bun.env.REGISTRATION_ENABLED!=="true"||!(await legalReady(sql)))){
   return send(m.from.id,"«Мир моделей» готовится к запуску. Регистрация откроется после публикации документов и проверки интеграций. Пока можно посмотреть демонстрацию.",buttons([[["🎬 Посмотреть демо","demo:home"]],[["📄 Документы","docs"]]]));
@@ -653,6 +654,7 @@ async function onCallback(c){
  if(c.data?.startsWith("demo:"))return demoScreen(c.from.id,c.data.slice(5));
  if(c.data==="docs")return send(c.from.id,"Документы сервиса: "+esc((Bun.env.PUBLIC_URL||"").replace(/\/$/,"")+"/documents"));
   if(c.data==="articles")return send(c.from.id,"📚 <b>Полезные материалы</b>\nВыберите тему:",buttons([...guideMenu().map(([title,key])=>[[title,key]]),[["◀️ В меню","home"]]]));
+  if(c.data==="how")return send(c.from.id,getGuide("getting-started").text,buttons([[["📚 Материалы","articles"],["✨ Начать","onboard:home"]]]));
   if(c.data?.startsWith("guide:")){
    const g=getGuide(c.data.slice(6));
    if(!g)return send(c.from.id,"Материал не найден.",buttons([[["📚 Все статьи","articles"]]]));
