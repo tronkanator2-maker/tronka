@@ -204,3 +204,10 @@ test("the client-facing feature page separates working flows from pending integr
  expect(callback).toContain("Оплата и возвраты");
  expect(callback).toContain("Сейчас бот открыт в тестовом режиме");
 });
+test("registration preview explains why real profile and job flows are blocked",()=>{
+ const preview=source.slice(source.indexOf("function registrationPreview(to){"),source.indexOf("async function begin(u){"));
+ expect(preview).toContain("Заполнение анкеты и заявок пока закрыто");
+ expect(preview).toContain("обязательные документы не опубликованы");
+ expect(preview).toContain("Для проверки всех сценариев включите тестовый режим");
+ expect(preview).toContain('"📄 Документы сервиса","docs"');
+});
