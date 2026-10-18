@@ -6,6 +6,7 @@ import {prepareAcceptedInvitationOutbox,acceptInvitationForRecipient,deliverAcce
 import {prepareInvitationOutbox,queueInitialInvitation,deliverPendingInvitations} from "./invitation-delivery.ts";
 import {parsePageOffset,pageNavigation} from "./pagination.ts";
 import {demoPage,demoItem,demoRoute} from "./demo-catalog.ts";
+import {prepareProfileRefreshQueue,queueProfileRefresh,runProfileRefreshBatch} from "./profile-refresh.ts";
 import {getGuide,guideMenu} from "./guides.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
@@ -93,6 +94,7 @@ await prepareRelay(sql);
 await prepareAcceptedResponseOutbox(sql);
 await prepareAcceptedInvitationOutbox(sql);
 await prepareInvitationOutbox(sql);
+await prepareProfileRefreshQueue(sql);
 await prepareDocuments(sql);
 await setupSourceHealth(sql);
 
@@ -421,6 +423,18 @@ async function demoScreen(id,screen="home"){
  return send(id,"🎬 <b>Демо «Мир моделей»</b>\n\n10 вымышленных анкет и 10 демонстрационных заявок, а также примеры поиска, откликов и приглашений.\n\nЭто безопасный просмотр: данные не публикуются, реальные уведомления никому не отправляются.",demoMenu());
 }
 
+let profileRefreshWorkerRunning=false;
+async function processProfileRefresh(){
+ if(profileRefreshWorkerRunning)return;
+ profileRefreshWorkerRunning=true;
+ try{
+  await ensure();
+  await runProfileRefreshBatch(sql,sendMatchedProfile,deliverTo,async participant=>
+   eligibleProfile(participant.profile,participant.photo) &&
+   allConsentsCurrent(participant.consent,await currentDocumentHashes()),5);
+ }finally{profileRefreshWorkerRunning=false}
+}
+
 let responseWorkerRunning=false;
 async function processResponseOutbox(){
  if(responseWorkerRunning)return;
@@ -637,7 +651,7 @@ if(m.photo?.length&&u.state==="photo"){
  const photos=saved[0]?.photos||[];
  if(photos.length>=5)await change(id,{state:""});
  if(photos.length===1)await send(id,"Первое фото сохранено — оно будет главным. Можно добавить до пяти фотографий.",buttons([[["✅ Готово","photo_done"]]]));
- if(photos.length>=5){await send(id,"Все пять фотографий сохранены ✅");const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await backfill(fresh);await profileBackfill(fresh);return begin(fresh)}
+ if(photos.length>=5){await send(id,"Все пять фотографий сохранены ✅");const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await queueProfileRefresh(sql,id);return begin(fresh)}
  return;
 }
 if(u.state==="relay"){
@@ -686,7 +700,7 @@ if(u.state==="browse_city"){
   const filters={...(u.filters||{}),profileCity:city};
   await change(id,{filters,state:""});return browseProfiles({...u,filters},0);
  }
- if(u.state==="filter"){let p=parse(t);await change(id,{filters:{...(u.filters||{}),city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});await send(id,"Фильтры сохранены. Подбираю актуальные заявки.",menu);const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await backfill(fresh);return showFilterMenu(fresh)}
+ if(u.state==="filter"){let p=parse(t);await change(id,{filters:{...(u.filters||{}),city:get(p,"город"),work:get(p,"тип работы"),format:get(p,"формат")},state:""});await send(id,"Фильтры сохранены. Подбираю актуальные заявки.",menu);const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];await queueProfileRefresh(sql,id);return showFilterMenu(fresh)}
 return begin(u)}
 async function onCallback(c){
  void call("answerCallbackQuery",{callback_query_id:c.id}).catch(e=>console.warn("Callback acknowledgment delayed",String(e)));
@@ -884,7 +898,7 @@ if(a==="profile_save"){
  await change(id,{profile:draft,filters:savedFilters,state:"",photos,photo:photos[0]||u.photo||null});
  const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];
  const gaps=incompleteProfileFields(fresh.profile,fresh.photo);
- if(fresh.photo){await profileBackfill(fresh);await backfill(fresh);}
+ if(fresh.photo)await queueProfileRefresh(sql,id);
  if(gaps.length){
   return send(id,"✅ Анкета сохранена, но пока не участвует в подборе.\n\nДля публикации осталось: "+esc(gaps.slice(0,9).join(", ")),buttons([[["✏️ Дополнить анкету","edit_profile"],["📷 Фото","addphoto"]],[["🏠 В меню","home"]]]));
  }
@@ -926,7 +940,7 @@ if(a.startsWith("photo_main:")||a.startsWith("photo_remove:")){
 if(a==="addphoto"){await change(id,{state:"photo"});return send(id,"Отправьте 1–5 фотографий: по одной или альбомом. Первая станет ключевой.",buttons([[["✅ Готово","photo_done"]]]))}if(a==="photo_done"){
  await change(id,{state:""});
  const fresh=(await sql("SELECT * FROM mm_users WHERE id=$1",id))[0];
- if(fresh.photo){await backfill(fresh);await profileBackfill(fresh)}
+ if(fresh.photo)await queueProfileRefresh(sql,id)
  return send(id,fresh.photo?"✅ Фото сохранены! Анкета готова к подбору, если все поля заполнены.":"Фото пока не добавлено. Вернуться к загрузке можно в любое время.",buttons([[["👤 Моя анкета","profile"],["🏠 В меню","home"]]]));
 }if(a==="new")return send(id,"📢 <b>Как создать заявку?</b>\nМожно ответить на восемь коротких вопросов или заполнить шаблон одним сообщением.",buttons([[["🪄 По шагам","jobwizard:start"]],[["📝 Заполнить шаблон","job_template"]],[["🏠 В меню","home"]]]));
  if(a==="job_template"){
@@ -1051,7 +1065,7 @@ if(a.startsWith("jobpause:")){const rows=await sql("UPDATE mm_jobs SET paused=NO
   await change(id,{filters});return showFilterMenu({...u,filters});
  }
  if(a==="filters")return showFilterMenu(u);
-if(a==="editfilters"){await change(id,{state:"filter"});return send(id,"Отправьте фильтры отдельным сообщением:\n<code>Город: Москва\nТип работы: реклама\nФормат: коммерция</code>\nЕсли строку оставить пустой, ограничение по ней отключится.")}if(a==="pause"){await change(id,{active:!u.active});if(!u.active)await backfill({...u,active:true});return send(id,u.active?"Поиск приостановлен. Анкета скрыта.":"Поиск возобновлён.")}if(a.startsWith("replyack:")){
+if(a==="editfilters"){await change(id,{state:"filter"});return send(id,"Отправьте фильтры отдельным сообщением:\n<code>Город: Москва\nТип работы: реклама\nФормат: коммерция</code>\nЕсли строку оставить пустой, ограничение по ней отключится.")}if(a==="pause"){await change(id,{active:!u.active});if(!u.active)await queueProfileRefresh(sql,id);return send(id,u.active?"Поиск приостановлен. Анкета скрыта.":"Поиск возобновлён.")}if(a.startsWith("replyack:")){
  const jobId=Number(a.slice("replyack:".length));
  if(!Number.isSafeInteger(jobId)||jobId<=0)return send(id,"Номер заявки не найден.");
  await sql("UPDATE mm_users SET first_reply_ack_at=COALESCE(first_reply_ack_at,NOW()) WHERE id=$1",id);
@@ -1330,6 +1344,7 @@ setInterval(()=>processResponseOutbox().catch(e=>console.error("response outbox 
 setInterval(()=>processAcceptedResponseOutbox().catch(e=>console.error("accepted response outbox tick",String(e))),5000);
 setInterval(()=>processAcceptedInvitationOutbox().catch(e=>console.error("accepted invitation outbox tick",String(e))),5000);
 setInterval(()=>processInvitationOutbox().catch(e=>console.error("initial invitation outbox tick",String(e))),5000);
+setInterval(()=>processProfileRefresh().catch(e=>console.error("profile refresh tick",String(e))),7500);
 setInterval(()=>consumeCollectorInbox().catch(e=>console.error("collector inbox",String(e))),5000);
 setInterval(()=>ensure().then(()=>reviewSourceHealth(sql)).catch(e=>console.error("source health",String(e))),24*60*60*1000);
 setInterval(()=>ensure().then(async()=>{
@@ -1341,6 +1356,7 @@ setTimeout(()=>runFanoutBatch().catch(e=>console.error("fanout startup",String(e
 setTimeout(()=>processAcceptedResponseOutbox().catch(e=>console.error("accepted response startup",String(e))),7000);
 setTimeout(()=>processAcceptedInvitationOutbox().catch(e=>console.error("accepted invitation startup",String(e))),7500);
 setTimeout(()=>processInvitationOutbox().catch(e=>console.error("initial invitation startup",String(e))),8000);
+setTimeout(()=>processProfileRefresh().catch(e=>console.error("profile refresh startup",String(e))),8500);
 if(token&&secret&&Bun.env.PUBLIC_URL)(async()=>{
  const me=await call("getMe",{});
  if(!me.ok){console.error("Telegram token failed getMe validation");return}
