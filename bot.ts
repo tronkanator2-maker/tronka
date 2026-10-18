@@ -855,20 +855,26 @@ if(a==="docs")return send(id,"Все опубликованные докумен
  }
  if(a==="edit_profile"){
  const draft=profileDraftOf(u);
- if(Object.keys(draft).length){
-  const filters=stageProfileDraft(u.filters,draft);
-  await change(id,{state:"profile",filters});
-  return send(id,"📝 <b>Редактирование анкеты</b>\nПришлите только изменившиеся поля. Например:\n<code>Город: Москва, Казань</code>\n\nИзменения появятся в каталоге после подтверждения.",buttons([[["❌ Отменить","wizard:cancel"]]]));
- }
- return send(id,"Выберите шаблон анкеты или заполните по шагам:",buttons([[["🪄 По шагам","profile_wizard"]],[["🎬 Модель / актёр","template_model"],["📸 Специалист / бренд","template_client"]]]));
+ const filters=stageProfileDraft(u.filters,draft);
+ // Persist the editor state already on the template selector: pasted text must
+ // be accepted even when the user skips the role selection buttons.
+ await change(id,{state:"profile",filters});
+ if(Object.keys(draft).length)return send(id,"📝 <b>Редактирование анкеты</b>\nОтправьте только изменённые поля, например:\n<code>Город: Москва, Казань</code>\n\nПосле проверки нажмите «Сохранить».",buttons([[["🎬 Шаблон модели","template_model"],["🪄 По шагам","profile_wizard"]],[["❌ Отмена","wizard:cancel"],["🏠 В меню","home"]]]));
+ return send(id,"📝 <b>Создание анкеты</b>\n\nВыберите образец ниже или отправьте готовый заполненный шаблон прямо сейчас.\nМожно также отвечать на вопросы по одному.",buttons([[["🎬 Модель / актёр","template_model"],["📸 Специалист / бренд","template_client"]],[["🪄 Заполнить по шагам","profile_wizard"]],[["❌ Отмена","wizard:cancel"],["🏠 В меню","home"]]]));
 }
 if(a==="template_model"||a==="template_client"){
  const role=a==="template_model"?"модель":"фотограф";
  const filters=stageProfileDraft(u.filters,{...profileDraftOf(u),"кто вы":role});
  await change(id,{state:"profile",filters});
  const tpl=a==="template_model"?profileTpl:clientTpl;
- return send(id,"📝 Скопируйте шаблон, заполните и отправьте отдельным сообщением (можно с фото):\n<code>"+esc(tpl)+"</code>\n\n");
-}if(a==="profile_save"){
+ return send(id,"📝 <b>Шаблон анкеты · "+(role==="модель"?"Модель / актёр":"Специалист / бренд")+"</b>\n\n1. Скопируйте образец ниже.\n2. Замените данные примера на свои.\n3. Отправьте заполненный текст следующим сообщением в этот чат.\n\n<pre>"+esc(tpl)+"</pre>\n\nНичего не публикуется без кнопки «Сохранить».",buttons([[["🪄 Вместо текста — по шагам",role==="модель"?"profile_step_model":"profile_step_client"]],[["🔄 Другой шаблон","profile_templates"],["❌ Отмена","wizard:cancel"]],[["🏠 В меню","home"]]]));
+}
+if(a==="profile_templates")return send(id,"Какой образец показать?",buttons([[["🎬 Модель / актёр","template_model"],["📸 Специалист / бренд","template_client"]],[["🪄 По шагам","profile_wizard"],["🏠 В меню","home"]]]));
+if(a==="profile_step_model"||a==="profile_step_client"){
+ const role=a==="profile_step_model"?"модель":"фотограф";
+ return startWizard(u,role);
+}
+if(a==="profile_save"){
  if(u.state!=="profile_confirm"||!u.filters?.profileDraft)return send(id,"Черновик не найден. Откройте «Моя анкета» и проверьте изменения.");
  const draft=profileDraftOf(u),errors=validProfile(draft);
  if(errors.length)return send(id,"Нужно исправить поля:\n• "+esc(errors.join("\n• ")));
