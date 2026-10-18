@@ -8,6 +8,10 @@ export const canUseTestFeatures = (env,consent) =>
  isTestMode(env) && consent?.test_access===true && hasTestAcknowledgements(consent);
 export const isPreConsentCommand = text =>
  /^\/(?:mydata|deleteaccount|support|cancel|help|id)(?:\s|$)/.test(String(text||""));
+// Public help and account-control callbacks must stay reachable before consent.
+export const isPreConsentCallback = action =>
+ ["more","support","access_info","invitefriend","privacy","privacy:export","privacy:delete",
+  "deleteaccount:cancel","deleteaccount:confirm","test:revoke"].includes(String(action||""));
 export const testWarning =
  "✨ <b>Добро пожаловать в «Мир моделей»!</b>\n" +
  "Здесь можно создать анкету, найти съёмку, разместить заявку и связаться с участниками.\n\n"+
