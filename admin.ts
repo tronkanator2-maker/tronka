@@ -78,7 +78,12 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
  if(!session)return json({error:"Требуется вход."},401);
  if(req.method==="POST"){
   const origin=req.headers.get("origin");
-  if(!origin||origin!==url.origin)return json({error:"Запрос отклонён."},403);
+  let expectedOrigin=url.origin,actualOrigin;
+  try{
+   if(Bun.env.PUBLIC_URL)expectedOrigin=new URL(Bun.env.PUBLIC_URL).origin;
+   if(origin)actualOrigin=new URL(origin).origin;
+  }catch{return json({error:"Запрос отклонён."},403)}
+  if(!origin||actualOrigin!==expectedOrigin)return json({error:"Запрос отклонён."},403);
  }
  if(url.pathname==="/admin/logout"&&req.method==="POST"){
   const id=req.headers.get("cookie")?.match(/mm_admin=([a-f0-9]{64})/)?.[1];
