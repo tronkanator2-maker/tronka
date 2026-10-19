@@ -74,7 +74,7 @@ footer{margin-top:30px}#login{max-width:500px;margin:10vh auto 0}#dashboard[hidd
 <input name="title" placeholder="Название документа" required></div>
 <textarea name="body" rows="9" placeholder="Полный утверждённый текст" required></textarea>
 <button class="primary" type="submit">Опубликовать редакцию</button></form>
-<p><a href="/documents" target="_blank" rel="noopener noreferrer">Открыть публичные документы ↗</a></p></div>
+<p><a href="/documents" target="_blank" rel="noopener noreferrer">Открыть публичные документы ↗</a></p><h2>История опубликованных редакций</h2><div id="documentHistory" class="table-wrap"></div></div>
 </section><footer class="small">Панель управления «Мир моделей». Все изменения сохраняются на сервере.</footer>
 <script>
 (function(){
@@ -211,6 +211,25 @@ async function loadFinance(){
  showKpis(el("financeKpis"),[["Ручной доступ активен",x.manual_access_active],["Пробный доступ активен",x.trial_access_active],["Пересечение доступов",x.overlapping_access],["Подтверждённая выручка",x.recognized_revenue===null?"Нет данных":x.recognized_revenue],["Транзакции",x.payment_count===null?"Нет данных":x.payment_count]]);
  el("financeNote").textContent=x.note||"Нет данных платёжных систем";
 }
+async function loadDocuments(){
+ const data=await api("data?section=documents");
+ const root=el("documentHistory");root.replaceChildren();
+ const history=data.history||[];
+ if(!history.length){
+  const label=document.createElement("p");label.textContent="Утверждённые редакции пока не опубликованы. Для публичного запуска нужны юридически проверенные тексты.";root.appendChild(label);return;
+ }
+ const table=document.createElement("table"),head=document.createElement("tr"),thead=document.createElement("thead"),body=document.createElement("tbody");
+ for(const name of ["Раздел","Редакция","Название","Опубликовано","SHA-256"]){const th=document.createElement("th");th.textContent=name;head.appendChild(th)}
+ thead.appendChild(head);table.appendChild(thead);
+ for(const item of history){
+  const row=document.createElement("tr");
+  for(const [name,value] of [["Раздел",item.slug],["Редакция",item.version],["Название",item.title],["Опубликовано",item.published_at],["SHA-256",item.sha256]]){
+   cell(row,name,value);
+  }
+  body.appendChild(row);
+ }
+ table.appendChild(body);root.appendChild(table);
+}
 async function selectTab(section){
  if(!["summary","finance","documents"].includes(section)&&!sections[section])return;
  if(state.role!=="owner"&&["finance","documents","audit","moderators"].includes(section))return;
@@ -228,6 +247,7 @@ async function selectTab(section){
   el("listHelp").textContent="Поиск по ID и основным полям · 20 записей на страницу";
   await loadList();
  }else if(section==="finance")await loadFinance();
+ else if(section==="documents")await loadDocuments();
  else if(section==="summary")await loadSummary();
 }
 async function boot(){
@@ -265,7 +285,7 @@ el("documentForm").onsubmit=async event=>{
  event.preventDefault();if(!confirm("Публикуется только юридически утверждённая версия. Подтвердить?"))return;
  const form=new FormData(event.target);
  try{const d=await api("action",{action:"document_publish",slug:form.get("slug"),title:form.get("title"),body:form.get("body")});
- notice("Опубликована редакция №"+d.document.version);event.target.reset();await loadSummary();
+ notice("Опубликована редакция №"+d.document.version);event.target.reset();await Promise.all([loadSummary(),loadDocuments()]);
  }catch(e){notice(e.message,true)}
 };
 boot();
