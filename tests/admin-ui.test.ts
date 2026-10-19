@@ -1,7 +1,7 @@
 import {test,expect} from "bun:test";
 import {adminHtml} from "../admin-ui.ts";
 test("dashboard presents structured, mobile-friendly tables with navigation and search",()=>{
- for(const marker of ["<table","data-tab=\"users\"","data-tab=\"jobs\"","data-tab=\"reports\"","data-tab=\"sources\"","data-tab=\"finance\"","id=\"search\"","id=\"nextPage\"","id=\"prevPage\"","@media(max-width:760px)"]){
+ for(const marker of ["document.createElement(\"table\")","data-tab=\"users\"","data-tab=\"jobs\"","data-tab=\"reports\"","data-tab=\"sources\"","data-tab=\"finance\"","id=\"search\"","id=\"nextPage\"","id=\"prevPage\"","@media(max-width:760px)"]){
   expect(adminHtml).toContain(marker);
  }
  expect(adminHtml).not.toContain("JSON.stringify(obj,null,2)");
