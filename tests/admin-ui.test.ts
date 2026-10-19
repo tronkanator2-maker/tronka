@@ -18,3 +18,11 @@ test("editing documents requires confirmation and forms show server results",()=
  expect(adminHtml).toContain("Ответ отправлен");
  expect(adminHtml).toContain("role");
 });
+
+test("embedded dashboard JavaScript parses successfully",()=>{
+ const script=adminHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1]||"";
+ expect(script.length).toBeGreaterThan(1000);
+ expect(()=>new Function(script)).not.toThrow();
+ expect(adminHtml).toContain("Юридические документы");
+ expect(adminHtml).not.toContain("\\u041C");
+});
