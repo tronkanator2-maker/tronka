@@ -1,7 +1,7 @@
 import {test,expect} from "bun:test";
 import {ADMIN_SECTIONS,PAGE_SIZE,parseAdminListParams,adminListStatements,readAdminList,canAdminAct,MODERATOR_ACTIONS,readFinanceSummary} from "../admin-data.ts";
 test("admin search and pagination are strictly allow-listed",()=>{
- expect(Object.keys(ADMIN_SECTIONS)).toEqual(["users","jobs","pending","sources","candidates","reports"]);
+ expect(Object.keys(ADMIN_SECTIONS)).toEqual(["users","jobs","pending","sources","candidates","reports","audit"]);
  expect(()=>adminListStatements("mm_users;DROP TABLE mm_users")).toThrow();
  const q=adminListStatements("jobs",3,"кастинг");
  expect(q.rows).toContain("FROM mm_jobs");
@@ -46,4 +46,11 @@ test("finance summary keeps unknown payment revenue unknown",async()=>{
  expect(finance.recognized_revenue).toBeNull();
  expect(finance.payment_count).toBeNull();
  expect(finance.gateway_connected).toBe(false);
+});
+
+test("only the owner may access sensitive audit history",()=>{
+ const q=adminListStatements("audit",1,"document_publish");
+ expect(q.rows).toContain("FROM mm_admin_log");
+ expect(q.rows).toContain("details");
+ expect(q.rowArgs).toEqual(["%document_publish%",20,0]);
 });
