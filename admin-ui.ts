@@ -43,7 +43,7 @@ footer{margin-top:30px}#login{max-width:500px;margin:10vh auto 0}#dashboard[hidd
 </style></head><body><main>
 <header><h1>🎬 Мир моделей</h1><div class="flex"><span id="role" class="small"></span><button id="logout" hidden>Выйти</button></div></header>
 <div id="notice" role="status" aria-live="polite"></div>
-<section id="login" class="panel"><h2>Вход в панель</h2><form id="loginForm"><div class="flex"><input name="password" type="password" autocomplete="current-password" placeholder="Пароль" required><button class="primary" type="submit">Войти</button></div></form></section>
+<section id="login" class="panel"><h2>Вход в панель</h2><form id="loginForm"><p class="small">Владелец входит по паролю; модератор указывает также свой логин.</p><div class="flex"><input name="username" autocomplete="username" placeholder="Логин модератора (если есть)"><input name="password" type="password" autocomplete="current-password" placeholder="Пароль" required><button class="primary" type="submit">Войти</button></div></form></section>
 <section id="dashboard" hidden>
 <nav id="tabs" aria-label="Разделы панели">
 <button data-tab="summary">Обзор</button><button data-tab="users">Пользователи</button>
@@ -51,7 +51,7 @@ footer{margin-top:30px}#login{max-width:500px;margin:10vh auto 0}#dashboard[hidd
 <button data-tab="reports">Обращения</button><button data-tab="sources">Источники</button>
 <button data-tab="candidates">Проверка источников</button><button data-tab="finance" class="owner-only">Финансы</button>
 <button data-tab="documents" class="owner-only">Документы</button>
-<button data-tab="audit" class="owner-only">Журнал действий</button>
+<button data-tab="audit" class="owner-only">Журнал действий</button><button data-tab="moderators" class="owner-only">Модераторы</button>
 </nav>
 <div class="panel" id="summaryPane"><div class="flex"><h2 class="grow">Состояние сервиса</h2><button id="refreshSummary">Обновить</button></div><div class="kpis" id="kpis"></div><p class="small" id="summaryNote"></p></div>
 <div class="panel hide" id="listPane">
@@ -61,6 +61,10 @@ footer{margin-top:30px}#login{max-width:500px;margin:10vh auto 0}#dashboard[hidd
 <div class="flex" id="pager"><button id="prevPage">← Назад</button><span id="pageInfo"></span><button id="nextPage">Дальше →</button></div>
 <div id="sourceAdd" class="hide"><h2>Добавить Telegram-источник</h2><form id="sourceForm" class="flex">
 <input name="id" placeholder="ID источника, -100..." required><input name="city" placeholder="Город"><input name="topic" placeholder="Тема"><button type="submit" class="primary">Добавить</button></form></div>
+<div id="moderatorAdd" class="hide"><h2>Новый модератор</h2><p>Создайте отдельную учётную запись и передайте пароль сотруднику самостоятельно. У модератора только права на обращения и модерацию заявок.</p>
+<form id="moderatorForm" class="flex"><input name="username" placeholder="Логин латиницей" minlength="3" maxlength="32" autocomplete="off" required>
+<input name="password" type="password" placeholder="Новый пароль от 16 символов" minlength="16" autocomplete="new-password" required>
+<button type="submit" class="primary">Создать модератора</button></form></div>
 </div>
 <div id="financePane" class="panel hide"><h2>Финансовый обзор</h2><p>Платёжные провайдеры ещё не подключены. Здесь показаны только выданные права доступа, без фиктивных оборотов.</p><div class="kpis" id="financeKpis"></div><p class="small" id="financeNote"></p></div>
 <div id="documentsPane" class="panel hide"><h2>Юридические документы</h2>
@@ -83,6 +87,7 @@ const sections={
  reports:{title:"Обращения",columns:[["id","№"],["reporter","От кого"],["kind","Тип"],["status","Статус"],["body","Текст"],["created_at","Создано"]]},
  sources:{title:"Источники Telegram",columns:[["id","ID"],["title","Название"],["city","Город"],["topic","Тема"],["active","Активен"],["mode","Режим"],["last_seen_at","Последняя запись"]]},
  candidates:{title:"Источники на проверке",columns:[["id","ID"],["title","Название"],["username","Ник"],["reason","Причина"],["total30","За 30 дней"],["checked_at","Проверен"]]},
+ moderators:{title:"Модераторы",columns:[["id","№"],["username","Логин"],["active","Активен"],["created_at","Создан"],["updated_at","Изменён"]]},
  audit:{title:"Журнал действий",columns:[["id","№"],["actor","Система"],["action","Действие"],["details","Детали"],["created_at","Когда"]]}
 };
 const state={role:"owner",section:"summary",page:1,pages:1,q:"",busy:false};
@@ -150,6 +155,10 @@ function renderActions(item,tr){
   add("+30 дней","access_grant",{days:30});
   add("Снять доступ","access_revoke",{},"Отозвать вручную выданный доступ?");
  }
+ if(state.section==="moderators"&&state.role==="owner"){
+  if(item.active)add("Отключить","moderator_disable",{},"Отключить модератора "+item.username+"?");
+  else add("Включить","moderator_enable");
+ }
  if(state.section==="sources"&&state.role==="owner"){
   if(item.active)add("Отключить","source_off",{},"Отключить источник "+item.id+"?");
   else add("Включить","source_on");
@@ -204,7 +213,7 @@ async function loadFinance(){
 }
 async function selectTab(section){
  if(!["summary","finance","documents"].includes(section)&&!sections[section])return;
- if(state.role!=="owner"&&["finance","documents","audit"].includes(section))return;
+ if(state.role!=="owner"&&["finance","documents","audit","moderators"].includes(section))return;
  state.section=section;state.page=1;state.q="";
  el("search").value="";
  document.querySelectorAll("nav [data-tab]").forEach(b=>b.setAttribute("aria-current",b.dataset.tab===section?"page":"false"));
@@ -213,6 +222,7 @@ async function selectTab(section){
  el("financePane").classList.toggle("hide",section!=="finance");
  el("documentsPane").classList.toggle("hide",section!=="documents");
  el("sourceAdd").classList.toggle("hide",section!=="sources"||state.role!=="owner");
+ el("moderatorAdd").classList.toggle("hide",section!=="moderators"||state.role!=="owner");
  if(sections[section]){
   el("sectionTitle").textContent=sections[section].title;
   el("listHelp").textContent="Поиск по ID и основным полям · 20 записей на страницу";
@@ -226,7 +236,7 @@ async function boot(){
 }
 el("loginForm").onsubmit=async event=>{
  event.preventDefault();const form=new FormData(event.target);
- try{const data=await api("login",{password:form.get("password")});event.target.reset();state.role=data.role;await boot();notice("Вход выполнен. Доступ: "+(data.role==="owner"?"владелец":"модератор"))}
+ try{const data=await api("login",{username:form.get("username"),password:form.get("password")});event.target.reset();state.role=data.role;await boot();notice("Вход выполнен. Доступ: "+(data.role==="owner"?"владелец":"модератор"))}
  catch(error){notice(error.message,true)}
 };
 el("logout").onclick=async()=>{try{await api("logout",{});setAuthenticated(false);notice("Вы вышли из панели.")}catch(e){notice(e.message,true)}};
@@ -243,6 +253,13 @@ el("sourceForm").onsubmit=async event=>{
  try{const r=await api("action",{action:"source_add",id:form.get("id"),city:form.get("city"),topic:form.get("topic")});
  notice(r.message||"Источник добавлен");event.target.reset();await loadList()
  }catch(e){notice(e.message,true)}
+};
+el("moderatorForm").onsubmit=async event=>{
+ event.preventDefault();const form=new FormData(event.target);
+ try{
+  const data=await api("action",{action:"moderator_create",username:form.get("username"),password:form.get("password")});
+  notice(data.message||"Модератор создан");event.target.reset();await loadList();
+ }catch(error){notice(error.message,true)}
 };
 el("documentForm").onsubmit=async event=>{
  event.preventDefault();if(!confirm("Публикуется только юридически утверждённая версия. Подтвердить?"))return;
