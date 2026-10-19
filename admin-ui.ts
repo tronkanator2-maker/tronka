@@ -51,6 +51,7 @@ footer{margin-top:30px}#login{max-width:500px;margin:10vh auto 0}#dashboard[hidd
 <button data-tab="reports">Обращения</button><button data-tab="sources">Источники</button>
 <button data-tab="candidates">Проверка источников</button><button data-tab="finance" class="owner-only">Финансы</button>
 <button data-tab="documents" class="owner-only">Документы</button>
+<button data-tab="audit" class="owner-only">Журнал действий</button>
 </nav>
 <div class="panel" id="summaryPane"><div class="flex"><h2 class="grow">Состояние сервиса</h2><button id="refreshSummary">Обновить</button></div><div class="kpis" id="kpis"></div><p class="small" id="summaryNote"></p></div>
 <div class="panel hide" id="listPane">
@@ -81,7 +82,8 @@ const sections={
  pending:{title:"Модерация заявок",columns:[["id","№"],["owner","Автор"],["name","Название"],["created_at","Создана"]]},
  reports:{title:"Обращения",columns:[["id","№"],["reporter","От кого"],["kind","Тип"],["status","Статус"],["body","Текст"],["created_at","Создано"]]},
  sources:{title:"Источники Telegram",columns:[["id","ID"],["title","Название"],["city","Город"],["topic","Тема"],["active","Активен"],["mode","Режим"],["last_seen_at","Последняя запись"]]},
- candidates:{title:"Источники на проверке",columns:[["id","ID"],["title","Название"],["username","Ник"],["reason","Причина"],["total30","За 30 дней"],["checked_at","Проверен"]]}
+ candidates:{title:"Источники на проверке",columns:[["id","ID"],["title","Название"],["username","Ник"],["reason","Причина"],["total30","За 30 дней"],["checked_at","Проверен"]]},
+ audit:{title:"Журнал действий",columns:[["id","№"],["actor","Система"],["action","Действие"],["details","Детали"],["created_at","Когда"]]}
 };
 const state={role:"owner",section:"summary",page:1,pages:1,q:"",busy:false};
 const notice=(message,error=false)=>{let box=el("notice");box.textContent=message;box.className=error?"error":"";box.style.display="block"};
@@ -202,7 +204,7 @@ async function loadFinance(){
 }
 async function selectTab(section){
  if(!["summary","finance","documents"].includes(section)&&!sections[section])return;
- if(state.role!=="owner"&&["finance","documents"].includes(section))return;
+ if(state.role!=="owner"&&["finance","documents","audit"].includes(section))return;
  state.section=section;state.page=1;state.q="";
  el("search").value="";
  document.querySelectorAll("nav [data-tab]").forEach(b=>b.setAttribute("aria-current",b.dataset.tab===section?"page":"false"));
