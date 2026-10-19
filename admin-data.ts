@@ -7,7 +7,8 @@ export const ADMIN_SECTIONS=Object.freeze({
  sources:{from:"mm_sources",fields:"id,title,username,city,topic,active,mode,last_seen_at,disabled_reason,created_at",search:["id::text","COALESCE(title,'')","COALESCE(username,'')","COALESCE(city,'')","COALESCE(topic,'')"]},
  candidates:{from:"mm_candidate_sources",fields:"id,username,title,reason,unique30,total30,checked_at",where:"status='needs_review'",search:["id::text","COALESCE(username,'')","COALESCE(title,'')"]},
  reports:{from:"mm_reports_v2",fields:"id,reporter,target_user,target_job,kind,status,body,created_at,updated_at",search:["id::text","reporter::text","COALESCE(body,'')","COALESCE(status,'')"]},
- audit:{from:"mm_admin_log",fields:"id,actor,action,details,created_at",search:["id::text","COALESCE(action,'')","COALESCE(details::text,'')"]}
+ audit:{from:"mm_admin_log",fields:"id,actor,action,details,created_at",search:["id::text","COALESCE(action,'')","COALESCE(details::text,'')"]},
+ moderators:{from:"mm_admin_moderators",fields:"id,username,active,created_at,updated_at",search:["id::text","COALESCE(username,'')"]}
 });
 export function parseAdminListParams(url){
  const section=String(url.searchParams.get("section")||"summary");
