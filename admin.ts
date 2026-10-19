@@ -77,6 +77,14 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
    if(session.role!=="owner")return json({error:"Только владелец может просматривать финансы"},403);
    return json({role:session.role,finance:await readFinanceSummary(sql)});
   }
+  if(section==="documents"){
+   if(session.role!=="owner")return json({error:"Публикации документов доступны только владельцу"},403);
+   const [latest,history]=await Promise.all([
+    latestDocuments(sql),
+    sql("SELECT slug,version,title,sha256,published_at FROM mm_documents ORDER BY published_at DESC LIMIT 100")
+   ]);
+   return json({role:session.role,published:latest,history});
+  }
   if(ADMIN_SECTIONS[section]){
    if(["audit","moderators"].includes(section)&&session.role!=="owner")return json({error:"Раздел доступен только владельцу"},403);
    const rawPage=Number(url.searchParams.get("page")||1);
