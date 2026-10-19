@@ -1,6 +1,9 @@
 // Self-contained UI: no third-party scripts or styles. Untrusted database content
 // is always inserted with textContent, never interpolated into innerHTML.
-export const adminHtml = String.raw`<!doctype html>
+function decodeAdminUnicode(value){
+ return value.replace(/\\u\\{([0-9a-fA-F]{1,6})\\}|\\u([0-9a-fA-F]{4})/g,(_match,longCode,shortCode)=>String.fromCodePoint(parseInt(longCode||shortCode,16)));
+}
+export const adminHtml = decodeAdminUnicode(String.raw`<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Мир моделей — управление</title>
 <style>
@@ -248,4 +251,4 @@ el("documentForm").onsubmit=async event=>{
 };
 boot();
 })();
-</script></main></body></html>`;
+</script></main></body></html>`);
