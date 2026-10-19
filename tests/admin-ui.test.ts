@@ -26,3 +26,11 @@ test("embedded dashboard JavaScript parses successfully",()=>{
  expect(adminHtml).toContain("Юридические документы");
  expect(adminHtml).not.toContain("\\u041C");
 });
+
+test("published legal document revisions show a safe owner-only history",()=>{
+ expect(adminHtml).toContain('id="documentHistory"');
+ expect(adminHtml).toContain('data-tab="documents"');
+ expect(adminHtml).toContain('async function loadDocuments()');
+ expect(adminHtml).toContain("data?section=documents");
+ expect(adminHtml).toContain('Опубликована редакция');
+});
