@@ -6,7 +6,8 @@ export const ADMIN_SECTIONS=Object.freeze({
  pending:{from:"mm_jobs",fields:"id,owner,body,status,source_id,created_at",where:"status='pending'",search:["id::text","owner::text","COALESCE(body::text,'')"]},
  sources:{from:"mm_sources",fields:"id,title,username,city,topic,active,mode,last_seen_at,disabled_reason,created_at",search:["id::text","COALESCE(title,'')","COALESCE(username,'')","COALESCE(city,'')","COALESCE(topic,'')"]},
  candidates:{from:"mm_candidate_sources",fields:"id,username,title,reason,unique30,total30,checked_at",where:"status='needs_review'",search:["id::text","COALESCE(username,'')","COALESCE(title,'')"]},
- reports:{from:"mm_reports_v2",fields:"id,reporter,target_user,target_job,kind,status,body,created_at,updated_at",search:["id::text","reporter::text","COALESCE(body,'')","COALESCE(status,'')"]}
+ reports:{from:"mm_reports_v2",fields:"id,reporter,target_user,target_job,kind,status,body,created_at,updated_at",search:["id::text","reporter::text","COALESCE(body,'')","COALESCE(status,'')"]},
+ audit:{from:"mm_admin_log",fields:"id,actor,action,details,created_at",search:["id::text","COALESCE(action,'')","COALESCE(details::text,'')"]}
 });
 export function parseAdminListParams(url){
  const section=String(url.searchParams.get("section")||"summary");
