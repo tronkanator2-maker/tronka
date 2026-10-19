@@ -70,6 +70,7 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
    return json({role:session.role,finance:await readFinanceSummary(sql)});
   }
   if(ADMIN_SECTIONS[section]){
+   if(section==="audit"&&session.role!=="owner")return json({error:"Только владелец может просматривать журнал действий"},403);
    const rawPage=Number(url.searchParams.get("page")||1);
    const page=Number.isSafeInteger(rawPage)?Math.max(1,Math.min(10000,rawPage)):1;
    const search=String(url.searchParams.get("q")||"").trim().slice(0,80);
@@ -89,7 +90,7 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
   if(action==="document_publish"){
     try {
       const document=await publishDocument(sql,String(data.slug||""),String(data.title||""),String(data.body||""));
-      await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,'document_publish',$1::jsonb)",JSON.stringify({slug:document.slug,version:document.version}));
+      await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,'document_publish',$1::jsonb)",JSON.stringify({slug:document.slug,version:document.version,role:session.role}));
       return json({ok:true,document});
     }catch(err){return json({error:String(err.message||err)},400)}
   }
@@ -109,7 +110,7 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
     if(!["new","in_progress","closed"].includes(status))return json({error:"Некорректный статус"},400);
     const updated=await sql("UPDATE mm_reports_v2 SET status=$1,updated_at=NOW() WHERE id=$2 RETURNING id",status,id);
     if(!updated.length)return json({error:"Обращение не найдено"},404);
-    await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,'ticket_status',$1::jsonb)",JSON.stringify({id,status}));
+    await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,'ticket_status',$1::jsonb)",JSON.stringify({id,status,role:session.role}));
     return json({ok:true,message:"Статус обращения №"+id+" обновлён."});
   }
   if(action==="candidate_approve"||action==="candidate_reject"){
@@ -119,8 +120,8 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
      await sql("INSERT INTO mm_sources(id,title,city,topic,username,active,mode) VALUES($1,$2,$3,'',$4,TRUE,'trial') ON CONFLICT(id) DO UPDATE SET active=TRUE,mode='trial',disabled_reason=NULL",id,candidate.title||"",inferCity(candidate.title||"",""),candidate.username||null);
    }
    await sql("UPDATE mm_candidate_sources SET status=$1,reason=$2,checked_at=NOW() WHERE id=$3",action==="candidate_approve"?"active":"rejected",action==="candidate_approve"?"Вручную проверено владельцем":"Отклонено владельцем",id);
-   await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,$1,$2::jsonb)",action,JSON.stringify({target:id}));
-   return json({ok:true});
+   await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,$1,$2::jsonb)",action,JSON.stringify({target:id,role:session.role}));
+   return json({ok:true,message:action==="candidate_approve"?"Источник подключён.":"Источник отклонён."});
  }
  if(action==="access_grant"||action==="access_revoke"){
    const days=Number(data.days||0);
@@ -129,7 +130,7 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
     ?await sql("UPDATE mm_users SET access_until=NULL WHERE id=$1 RETURNING id",id)
     :await sql("UPDATE mm_users SET access_until=GREATEST(COALESCE(access_until,NOW()),NOW())+make_interval(days=>$2::int) WHERE id=$1 RETURNING id",id,days);
    if(!updated.length)return json({error:"Аккаунт не найден"},404);
-   await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,$1,$2::jsonb)",action,JSON.stringify({target:id,days:action==="access_grant"?days:0}));
+   await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,$1,$2::jsonb)",action,JSON.stringify({target:id,days:action==="access_grant"?days:0,role:session.role}));
    return json({ok:true});
  }
  let changed=[];
