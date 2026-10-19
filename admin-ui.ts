@@ -1,6 +1,6 @@
 // Self-contained UI: no third-party scripts or styles. Untrusted database content
 // is always inserted with textContent, never interpolated into innerHTML.
-export const adminHtml = String.raw\`<!doctype html>
+export const adminHtml = String.raw`<!doctype html>
 <html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Мир моделей — управление</title>
 <style>
@@ -86,7 +86,7 @@ const fmt=v=>{
  if(v===null||v===undefined||v==="")return "—";
  if(typeof v==="boolean")return v?"Да":"Нет";
  if(typeof v==="object")return JSON.stringify(v).slice(0,250);
- if(typeof v==="string"&&/^\\d{4}-\\d\\d-\\d\\dT/.test(v)){const d=new Date(v);return isNaN(d.getTime())?v:d.toLocaleString("ru-RU")}
+ if(typeof v==="string"&&/^\d{4}-\d\d-\d\dT/.test(v)){const d=new Date(v);return isNaN(d.getTime())?v:d.toLocaleString("ru-RU")}
  return String(v);
 };
 const label=(v)=>{const n=document.createElement("span");n.textContent=fmt(v);return n};
@@ -248,4 +248,4 @@ el("documentForm").onsubmit=async event=>{
 };
 boot();
 })();
-</script></main></body></html>\`;
+</script></main></body></html>`;
