@@ -45,6 +45,7 @@ test("owner creates named moderator and revoking role blocks existing session im
   expect((await modLogin.json()).role).toBe("moderator");
   expect((await adminApp(request("/admin/data?section=moderators","GET",null,modCookie),sql)).status).toBe(403);
   expect((await adminApp(request("/admin/data?section=finance","GET",null,modCookie),sql)).status).toBe(403);
+  expect((await adminApp(request("/admin/data?section=documents","GET",null,modCookie),sql)).status).toBe(403);
   expect((await adminApp(request("/admin/action","POST",{action:"moderator_disable",id:91},modCookie),sql)).status).toBe(403);
   const disable=await adminApp(request("/admin/action","POST",{action:"moderator_disable",id:91},ownerCookie),sql);
   expect(disable.status).toBe(200);
