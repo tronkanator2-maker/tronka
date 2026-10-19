@@ -34,6 +34,7 @@ test("admin routes enforce login, moderator restrictions and valid action result
   expect((await mod.json()).role).toBe("moderator");
   const moderatorCookie=mod.headers.get("set-cookie").split(";")[0];
   expect((await adminApp(req("/admin/data?section=finance","GET",null,moderatorCookie),sql)).status).toBe(403);
+  expect((await adminApp(req("/admin/data?section=audit","GET",null,moderatorCookie),sql)).status).toBe(403);
   expect((await adminApp(req("/admin/action","POST",{action:"document_publish",slug:"offer",title:"Bad",body:"Bad"},moderatorCookie),sql)).status).toBe(403);
   expect((await adminApp(req("/admin/action","POST",{action:"access_grant",id:12,days:90},moderatorCookie),sql)).status).toBe(403);
   const moderate=await adminApp(req("/admin/action","POST",{action:"ticket_status",id:42,status:"closed"},moderatorCookie),sql);
