@@ -1,11 +1,13 @@
 import {publishDocument,legalReady,latestDocuments} from "./documents.ts";
 import {inferCity} from "./engine.ts";
 import {adminHtml} from "./admin-ui.ts";
+import {prepareModerators,createModerator,authenticateModerator,updateModeratorStatus} from "./admin-moderators.ts";
 import {ADMIN_SECTIONS,readAdminList,readFinanceSummary,canAdminAct} from "./admin-data.ts";
 // Minimal secured operational dashboard. Disabled until ADMIN_PASSWORD is configured.
 // Session tokens are only kept in memory; no user data is exposed to unauthenticated requests.
 const sessions = new Map();
 const attempts = new Map();
+let moderatorsPrepared=false;
 const json = (data,status=200,headers={}) => new Response(JSON.stringify(data),{status,headers:{"content-type":"application/json; charset=utf-8","cache-control":"no-store",...headers}});
 function equal(a,b){
   const aa=new TextEncoder().encode(String(a)), bb=new TextEncoder().encode(String(b));
@@ -25,6 +27,7 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
  if(!url.pathname.startsWith("/admin"))return null;
  const enabled=!!Bun.env.ADMIN_PASSWORD;
  if(!enabled)return json({error:"Админка не настроена: задайте ADMIN_PASSWORD."},503);
+ if(!moderatorsPrepared){await prepareModerators(sql);moderatorsPrepared=true;}
  if(url.pathname==="/admin"&&req.method==="GET"){
   return new Response(adminHtml,{headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store","content-security-policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'","x-content-type-options":"nosniff","x-frame-options":"DENY"}});
  }
@@ -34,9 +37,10 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
   if(previous.until>Date.now())return json({error:"Слишком много попыток входа."},429);
   let body;try{body=await req.json()}catch{return json({error:"Некорректный запрос"},400)}
   const owner=equal(body?.password,Bun.env.ADMIN_PASSWORD);
-  // Moderator role is optional and requires a separate configured credential.
-  const moderator=!owner && !!Bun.env.ADMIN_MODERATOR_PASSWORD && Bun.env.ADMIN_MODERATOR_PASSWORD.length>=16 &&
-     !equal(Bun.env.ADMIN_MODERATOR_PASSWORD,Bun.env.ADMIN_PASSWORD) && equal(body?.password,Bun.env.ADMIN_MODERATOR_PASSWORD);
+  const namedModerator=!owner&&body?.username?await authenticateModerator(sql,body.username,body.password):null;
+  // Legacy shared moderator password is supported, but new moderators have distinct accounts.
+  const moderator=!owner && (!!namedModerator || (!!Bun.env.ADMIN_MODERATOR_PASSWORD && Bun.env.ADMIN_MODERATOR_PASSWORD.length>=16 &&
+    !equal(Bun.env.ADMIN_MODERATOR_PASSWORD,Bun.env.ADMIN_PASSWORD) && equal(body?.password,Bun.env.ADMIN_MODERATOR_PASSWORD)));
   if(!owner&&!moderator){
    previous.n++;previous.until=Date.now()+(previous.n>=5?300000:1500);
    attempts.set(address,previous);return json({error:"Неверные данные."},401);
@@ -44,11 +48,15 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
   attempts.delete(address);
   const bytes=crypto.getRandomValues(new Uint8Array(32));
   const id=Array.from(bytes).map(x=>x.toString(16).padStart(2,"0")).join("");
-  sessions.set(id,{expires:Date.now()+12*3600e3,role:owner?"owner":"moderator"});
+  sessions.set(id,{expires:Date.now()+12*3600e3,role:owner?"owner":"moderator",principalId:namedModerator?.id||null,principalName:owner?"owner":namedModerator?.username||"legacy-moderator"});
   return json({ok:true,role:owner?"owner":"moderator"},200,{"set-cookie":"mm_admin="+id+"; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=43200"});
  }
  const session=sessionFrom(req);
  if(!session)return json({error:"Требуется вход."},401);
+ if(session.principalId){
+  const valid=await sql("SELECT id FROM mm_admin_moderators WHERE id=$1 AND active=TRUE",session.principalId);
+  if(!valid.length)return json({error:"Доступ модератора отозван. Выполните вход снова."},401);
+ }
  if(req.method==="POST"){
   const origin=req.headers.get("origin");
   let expectedOrigin=url.origin,actualOrigin;
@@ -70,7 +78,7 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
    return json({role:session.role,finance:await readFinanceSummary(sql)});
   }
   if(ADMIN_SECTIONS[section]){
-   if(section==="audit"&&session.role!=="owner")return json({error:"Только владелец может просматривать журнал действий"},403);
+   if(["audit","moderators"].includes(section)&&session.role!=="owner")return json({error:"Раздел доступен только владельцу"},403);
    const rawPage=Number(url.searchParams.get("page")||1);
    const page=Number.isSafeInteger(rawPage)?Math.max(1,Math.min(10000,rawPage)):1;
    const search=String(url.searchParams.get("q")||"").trim().slice(0,80);
@@ -87,6 +95,13 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
   let data;try{data=await req.json()}catch{return json({error:"Некорректный запрос"},400)}
   const action=String(data?.action||"");
   if(!canAdminAct(session.role,action))return json({error:"Недостаточно прав для этого действия"},403);
+  if(action==="moderator_create"){
+   try{
+    const moderator=await createModerator(sql,data.username,data.password);
+    await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,'moderator_create',$1::jsonb)",JSON.stringify({moderator_id:moderator.id,username:moderator.username,by:session.principalName}));
+    return json({ok:true,moderator,message:"Модератор "+moderator.username+" создан. Передайте ему логин и пароль отдельно."});
+   }catch(e){return json({error:String(e.message||e)},400)}
+  }
   if(action==="document_publish"){
     try {
       const document=await publishDocument(sql,String(data.slug||""),String(data.title||""),String(data.body||""));
@@ -96,6 +111,14 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
   }
   const id=Number(data?.id);
   if(!Number.isSafeInteger(id))return json({error:"Некорректный ID"},400);
+  if(action==="moderator_enable"||action==="moderator_disable"){
+   try{
+    const enabled=action==="moderator_enable",moderator=await updateModeratorStatus(sql,id,enabled);
+    if(!moderator)return json({error:"Модератор не найден"},404);
+    await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,$1,$2::jsonb)",action,JSON.stringify({id,username:moderator.username,by:session.principalName}));
+    return json({ok:true,message:enabled?"Модератор включён.":"Модератор отключён; его активные сессии теперь недействительны."});
+   }catch(e){return json({error:String(e.message||e)},400)}
+  }
   if(action==="ticket_reply"){
     const message=String(data.message||"").trim();
     if(!onTicketReply)return json({error:"Отправка ответов не настроена"},503);
