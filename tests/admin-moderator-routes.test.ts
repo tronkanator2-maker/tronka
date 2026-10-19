@@ -24,7 +24,7 @@ test("owner creates named moderator and revoking role blocks existing session im
   return [];
  };
  const request=(path,method="GET",payload,auth)=>{
-  const headers={"content-type":"application/json"};
+  const headers={"content-type":"application/json","x-forwarded-for":"198.51.100.88"};
   if(method==="POST")headers.origin="https://adm.example";
   if(auth)headers.cookie=auth;
   return new Request("https://adm.example"+path,{method,headers,body:method==="POST"?JSON.stringify(payload):undefined});
