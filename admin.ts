@@ -1,5 +1,7 @@
 import {publishDocument,legalReady,latestDocuments} from "./documents.ts";
 import {inferCity} from "./engine.ts";
+import {adminHtml} from "./admin-ui.ts";
+import {ADMIN_SECTIONS,readAdminList,readFinanceSummary,canAdminAct} from "./admin-data.ts";
 // Minimal secured operational dashboard. Disabled until ADMIN_PASSWORD is configured.
 // Session tokens are only kept in memory; no user data is exposed to unauthenticated requests.
 const sessions = new Map();
@@ -18,61 +20,32 @@ function sessionFrom(req){
  if(!session||session.expires<Date.now()){sessions.delete(found[1]);return null}
  return session;
 }
-const appHtml = [
- '<!doctype html><html lang="ru"><head><meta charset="utf-8">',
- '<meta name="viewport" content="width=device-width, initial-scale=1">',
- '<title>Мир моделей — управление</title>',
- '<style>body{font-family:system-ui;background:#0e1523;color:#eef3ff;margin:0;padding:32px}main{max-width:1100px;margin:auto}header{display:flex;justify-content:space-between;align-items:center}h1{margin:0 0 12px}p{color:#a8b5ce}.panel{background:#192436;border:1px solid #304057;border-radius:14px;padding:22px;margin:16px 0}input,button,select,textarea{background:#25344c;border:1px solid #526680;color:#fff;border-radius:8px;padding:11px;margin:5px;font:inherit}button{cursor:pointer}button:hover{background:#375072}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 monospace}code{color:#8abaff}.small{font-size:13px;color:#a8b5ce}#msg{color:#ffd292}</style>',
- '</head><body><main><header><h1>🎬 Мир моделей</h1><span class="small">Панель управления</span></header>',
- '<p>Модерация · пользователи · заявки · источники · обращения</p>',
- '<section class="panel" id="login"><h2>Вход</h2><form id="form"><input name="password" placeholder="Пароль" type="password" autocomplete="current-password" required><button>Войти</button></form></section>',
- '<section id="dashboard" style="display:none"><div class="panel"><button data-op="refresh">Обновить</button><button data-op="logout">Выйти</button><p id="counters"></p></div>',
- '<div class="panel"><h2>Юридические документы</h2><p>Публикуйте только утверждённые юристом тексты. Новая редакция сохранится отдельно от предыдущей.</p><form id="documentForm"><select name="slug"><option value="offer">Оферта</option><option value="rules">Правила</option><option value="privacy">Политика конфиденциальности</option><option value="processing">Обработка данных</option><option value="distribution">Распространение анкеты</option><option value="esignature">Электронная подпись</option><option value="overview">Обзор функционала</option><option value="safety">Безопасность</option><option value="portfolio">Портфолио</option></select><input name="title" placeholder="Название"><textarea name="body" placeholder="Полный текст утверждённого документа" rows="8" required></textarea><button>Опубликовать новую версию</button></form><p><a href="/documents">Открыть документы</a></p></div>',
- '<div class="panel"><h2>Источники Telegram</h2><form id="source"><input name="id" placeholder="-100... ID источника" required><input name="city" placeholder="Город"><input name="topic" placeholder="Тема"><button>Добавить / включить</button></form><pre id="sources"></pre></div>',
- '<div class="panel"><h2>Найденные источники, требующие проверки</h2><p>Подключайте источник только после проверки причин риска и законности объявлений.</p><form id="candidateForm"><input name="id" placeholder="ID найденного источника" required><select name="action"><option value="candidate_reject">Отклонить</option><option value="candidate_approve">Подключить после проверки</option></select><button>Применить</button></form><pre id="candidates"></pre></div>',
- '<div class="panel"><h2>Модерация</h2><form id="decision"><input name="id" placeholder="№ заявки" required><select name="action"><option value="approve">Одобрить</option><option value="reject">Отклонить</option></select><button>Применить</button></form><pre id="pending"></pre></div>',
- '<div class="panel"><h2>Обращения</h2><form id="ticketForm"><input name="id" placeholder="Номер обращения" required><textarea name="message" placeholder="Ответ пользователю от имени бота" rows="3" required></textarea><button>Ответить</button></form><form id="ticketStatus"><input name="id" placeholder="Номер обращения" required><select name="status"><option value="in_progress">В работе</option><option value="closed">Закрыто</option><option value="new">Новое</option></select><button>Изменить статус</button></form><pre id="reports"></pre></div>',
- '<div class="panel"><h2>Тестовый доступ без платежа</h2><p>Срок доступа выставляется только вручную администратором. Банковских операций этот экран не совершает.</p><form id="accessForm"><input name="id" placeholder="Telegram ID" required><select name="days"><option value="30">30 дней</option><option value="90">90 дней</option><option value="180">180 дней</option></select><select name="action"><option value="access_grant">Предоставить доступ</option><option value="access_revoke">Отозвать доступ</option></select><button>Сохранить</button></form></div>',
- '<div class="panel"><h2>Пользователи</h2><form id="usersForm"><input name="id" placeholder="Telegram ID" required><select name="action"><option value="block">Заблокировать</option><option value="unblock">Разблокировать</option></select><button>Применить</button></form><pre id="users"></pre></div></section><p id="msg"></p>',
- '<script>',
- 'const $=x=>document.getElementById(x);',
- 'async function api(path,body){const r=await fetch("/admin/"+path,{method:body?"POST":"GET",headers:{"content-type":"application/json"},body:body?JSON.stringify(body):undefined,credentials:"same-origin"});const d=await r.json();if(!r.ok)throw Error(d.error||"Ошибка");return d}',
- 'const view=(id,obj)=>{$(id).textContent=typeof obj==="string"?obj:JSON.stringify(obj,null,2)};',
- 'async function refresh(){try{const d=await api("data");$("login").style.display="none";$("dashboard").style.display="block";view("counters",d.stats);view("sources",d.sources);view("candidates",d.candidates);view("pending",d.pending);view("reports",d.reports);view("users",d.users);$("msg").textContent=""}catch(e){$("dashboard").style.display="none";$("login").style.display="block";$("msg").textContent=e.message}}',
- '$("form").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("login",{password:f.get("password")});e.target.reset();refresh()}catch(err){$("msg").textContent=err.message}};',
- '$("documentForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);if(!confirm("Вы уверены, что документ юридически утверждён?"))return;try{const result=await api("action",{action:"document_publish",slug:f.get("slug"),title:f.get("title"),body:f.get("body")});$("msg").textContent="Опубликована версия "+result.document.version;refresh()}catch(err){$("msg").textContent=err.message}};',
- '$("source").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:"source_add",id:f.get("id"),city:f.get("city"),topic:f.get("topic")});refresh()}catch(err){$("msg").textContent=err.message}};',
- '$("ticketForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:"ticket_reply",id:f.get("id"),message:f.get("message")});e.target.reset();refresh()}catch(err){$("msg").textContent=err.message}};',
- '$("ticketStatus").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:"ticket_status",id:f.get("id"),status:f.get("status")});refresh()}catch(err){$("msg").textContent=err.message}};',
- '$("accessForm").onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:f.get("action"),id:f.get("id"),days:f.get("days")});refresh()}catch(err){$("msg").textContent=err.message}};',
- 'for(const formId of ["candidateForm","decision","usersForm"]){$(formId).onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{await api("action",{action:f.get("action"),id:f.get("id")});refresh()}catch(err){$("msg").textContent=err.message}}}',
- 'document.querySelector("[data-op=refresh]").onclick=refresh;',
- 'document.querySelector("[data-op=logout]").onclick=async()=>{await api("logout",{});refresh()};',
- 'refresh();</script></main></body></html>'
-].join("");
 export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
  const url=new URL(req.url);
  if(!url.pathname.startsWith("/admin"))return null;
  const enabled=!!Bun.env.ADMIN_PASSWORD;
  if(!enabled)return json({error:"Админка не настроена: задайте ADMIN_PASSWORD."},503);
  if(url.pathname==="/admin"&&req.method==="GET"){
-  return new Response(appHtml,{headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store","content-security-policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'","x-content-type-options":"nosniff","x-frame-options":"DENY"}});
+  return new Response(adminHtml,{headers:{"content-type":"text/html; charset=utf-8","cache-control":"no-store","content-security-policy":"default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; form-action 'self'; base-uri 'none'","x-content-type-options":"nosniff","x-frame-options":"DENY"}});
  }
  const address=req.headers.get("x-forwarded-for")?.split(",")[0]||"unknown";
  if(url.pathname==="/admin/login"&&req.method==="POST"){
   const previous=attempts.get(address)||{n:0,until:0};
   if(previous.until>Date.now())return json({error:"Слишком много попыток входа."},429);
   let body;try{body=await req.json()}catch{return json({error:"Некорректный запрос"},400)}
-  const valid=equal(body?.password,Bun.env.ADMIN_PASSWORD);
-  if(!valid){
+  const owner=equal(body?.password,Bun.env.ADMIN_PASSWORD);
+  // Moderator role is optional and requires a separate configured credential.
+  const moderator=!owner && !!Bun.env.ADMIN_MODERATOR_PASSWORD && Bun.env.ADMIN_MODERATOR_PASSWORD.length>=16 &&
+     !equal(Bun.env.ADMIN_MODERATOR_PASSWORD,Bun.env.ADMIN_PASSWORD) && equal(body?.password,Bun.env.ADMIN_MODERATOR_PASSWORD);
+  if(!owner&&!moderator){
    previous.n++;previous.until=Date.now()+(previous.n>=5?300000:1500);
    attempts.set(address,previous);return json({error:"Неверные данные."},401);
   }
   attempts.delete(address);
   const bytes=crypto.getRandomValues(new Uint8Array(32));
   const id=Array.from(bytes).map(x=>x.toString(16).padStart(2,"0")).join("");
-  sessions.set(id,{expires:Date.now()+12*3600e3});
-  return json({ok:true},200,{"set-cookie":"mm_admin="+id+"; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=43200"});
+  sessions.set(id,{expires:Date.now()+12*3600e3,role:owner?"owner":"moderator"});
+  return json({ok:true,role:owner?"owner":"moderator"},200,{"set-cookie":"mm_admin="+id+"; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=43200"});
  }
  const session=sessionFrom(req);
  if(!session)return json({error:"Требуется вход."},401);
@@ -91,20 +64,28 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
   return json({ok:true},200,{"set-cookie":"mm_admin=; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=0"});
  }
  if(url.pathname==="/admin/data"&&req.method==="GET"){
-  const [[stats],sources,candidates,pending,reports,users]=await Promise.all([
-    sql("SELECT (SELECT COUNT(*) FROM mm_users)::int users,(SELECT COUNT(*) FROM mm_jobs)::int jobs,(SELECT COUNT(*) FROM mm_jobs WHERE source_id IS NOT NULL)::int imported,(SELECT COUNT(*) FROM mm_responses)::int responses,(SELECT COUNT(*) FROM mm_sources WHERE active)::int active_sources,(SELECT COUNT(*) FROM mm_jobs WHERE status='pending')::int pending,(SELECT COUNT(*) FROM mm_response_outbox WHERE completed_at IS NULL)::int queued_responses,(SELECT COUNT(*) FROM mm_response_outbox WHERE completed_at IS NULL AND attempts>=3)::int struggling_responses,(SELECT COUNT(*) FROM mm_fanout_queue WHERE pending=TRUE)::int queued_job_broadcasts,(SELECT COUNT(*) FROM mm_collector_inbox WHERE processed_at IS NULL)::int unprocessed_source_posts,(SELECT COUNT(*) FROM mm_reports_v2 WHERE status='new')::int new_support_tickets,(SELECT MAX(created_at) FROM mm_updates) AS latest_webhook_at"),
-    sql("SELECT id,title,city,topic,active,mode,last_seen_at,disabled_reason,created_at FROM mm_sources ORDER BY created_at DESC LIMIT 100"),
-    sql("SELECT id,username,title,reason,unique30,total30,checked_at FROM mm_candidate_sources WHERE status='needs_review' ORDER BY checked_at DESC LIMIT 50"),
-    sql("SELECT id,body,source_id,created_at FROM mm_jobs WHERE status='pending' ORDER BY id LIMIT 30"),
-    sql("SELECT id,reporter,target_user,target_job,kind,status,body,created_at,updated_at FROM mm_reports_v2 ORDER BY id DESC LIMIT 40"),
-    sql("SELECT id,username,first_name,active,blocked,suspended,created_at FROM mm_users ORDER BY created_at DESC LIMIT 40")
+  const section=String(url.searchParams.get("section")||"summary");
+  if(section==="finance"){
+   if(session.role!=="owner")return json({error:"Только владелец может просматривать финансы"},403);
+   return json({role:session.role,finance:await readFinanceSummary(sql)});
+  }
+  if(ADMIN_SECTIONS[section]){
+   const rawPage=Number(url.searchParams.get("page")||1);
+   const page=Number.isSafeInteger(rawPage)?Math.max(1,Math.min(10000,rawPage)):1;
+   const search=String(url.searchParams.get("q")||"").trim().slice(0,80);
+   return json({role:session.role,...await readAdminList(sql,section,page,search)});
+  }
+  if(section!=="summary")return json({error:"Раздел не найден"},404);
+  const [records,documents]=await Promise.all([
+   sql("SELECT (SELECT COUNT(*) FROM mm_users)::int users,(SELECT COUNT(*) FROM mm_jobs)::int jobs,(SELECT COUNT(*) FROM mm_jobs WHERE source_id IS NOT NULL)::int imported,(SELECT COUNT(*) FROM mm_responses)::int responses,(SELECT COUNT(*) FROM mm_sources WHERE active)::int active_sources,(SELECT COUNT(*) FROM mm_jobs WHERE status='pending')::int pending,(SELECT COUNT(*) FROM mm_response_outbox WHERE completed_at IS NULL)::int queued_responses,(SELECT COUNT(*) FROM mm_response_outbox WHERE completed_at IS NULL AND attempts>=3)::int struggling_responses,(SELECT COUNT(*) FROM mm_fanout_queue WHERE pending=TRUE)::int queued_job_broadcasts,(SELECT COUNT(*) FROM mm_collector_inbox WHERE processed_at IS NULL)::int unprocessed_source_posts,(SELECT COUNT(*) FROM mm_reports_v2 WHERE status='new')::int new_support_tickets,(SELECT MAX(created_at) FROM mm_updates) AS latest_webhook_at"),
+   latestDocuments(sql)
   ]);
-  const published=await latestDocuments(sql);
-  return json({stats:{...stats,registration_enabled:Bun.env.REGISTRATION_ENABLED==="true",required_documents_ready:await legalReady(sql),published_documents:published.length,collector_credentials_available:!!Bun.env.TG_STRING_SESSION},sources,candidates,pending,reports,users});
+  return json({role:session.role,stats:{...(records[0]||{}),registration_enabled:Bun.env.REGISTRATION_ENABLED==="true",required_documents_ready:await legalReady(sql),published_documents:documents.length,collector_credentials_available:!!Bun.env.TG_STRING_SESSION}});
  }
  if(url.pathname==="/admin/action"&&req.method==="POST"){
   let data;try{data=await req.json()}catch{return json({error:"Некорректный запрос"},400)}
   const action=String(data?.action||"");
+  if(!canAdminAct(session.role,action))return json({error:"Недостаточно прав для этого действия"},403);
   if(action==="document_publish"){
     try {
       const document=await publishDocument(sql,String(data.slug||""),String(data.title||""),String(data.body||""));
@@ -118,7 +99,9 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
     const message=String(data.message||"").trim();
     if(!onTicketReply)return json({error:"Отправка ответов не настроена"},503);
     if(!message||message.length>3000)return json({error:"Введите текст до 3000 символов"},400);
-    try{await onTicketReply(id,message);return json({ok:true})}
+    try{await onTicketReply(id,message);
+      await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,'ticket_reply',$1::jsonb)",JSON.stringify({ticket:id,role:session.role}));
+      return json({ok:true,message:"Ответ на обращение №"+id+" доставлен пользователю."})}
     catch(err){return json({error:String(err.message||err)},502)}
   }
   if(action==="ticket_status"){
@@ -127,7 +110,7 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
     const updated=await sql("UPDATE mm_reports_v2 SET status=$1,updated_at=NOW() WHERE id=$2 RETURNING id",status,id);
     if(!updated.length)return json({error:"Обращение не найдено"},404);
     await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,'ticket_status',$1::jsonb)",JSON.stringify({id,status}));
-    return json({ok:true});
+    return json({ok:true,message:"Статус обращения №"+id+" обновлён."});
   }
   if(action==="candidate_approve"||action==="candidate_reject"){
    const candidate=(await sql("SELECT * FROM mm_candidate_sources WHERE id=$1 AND status='needs_review'",id))[0];
