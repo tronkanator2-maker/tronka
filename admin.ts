@@ -132,15 +132,28 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
    await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,$1,$2::jsonb)",action,JSON.stringify({target:id,days:action==="access_grant"?days:0}));
    return json({ok:true});
  }
- if(action==="source_add")await sql("INSERT INTO mm_sources(id,city,topic,active) VALUES($1,$2,$3,TRUE) ON CONFLICT(id) DO UPDATE SET city=EXCLUDED.city,topic=EXCLUDED.topic,active=TRUE,mode='trial',disabled_reason=NULL,disabled_at=NULL",id,String(data.city||"").slice(0,90),String(data.topic||"").slice(0,90));
-  else if(action==="source_off")await sql("UPDATE mm_sources SET active=FALSE WHERE id=$1",id);
-  else if(action==="approve"){const jobs=await sql("UPDATE mm_jobs SET status='active' WHERE id=$1 AND status='pending' RETURNING *",id);if(jobs.length&&onApprove)await onApprove(jobs[0])}
-  else if(action==="reject")await sql("UPDATE mm_jobs SET status='rejected' WHERE id=$1 AND status='pending'",id);
-  else if(action==="block"){await sql("UPDATE mm_users SET blocked=TRUE WHERE id=$1",id);await sql("UPDATE mm_jobs SET paused=TRUE WHERE owner=$1 AND status='active'",id);}
-  else if(action==="unblock")await sql("UPDATE mm_users SET blocked=FALSE,suspended=FALSE WHERE id=$1",id);
-  else return json({error:"Неизвестное действие"},400);
-  await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,$1,$2::jsonb)",action,JSON.stringify({target:id}));
-  return json({ok:true});
+ let changed=[];
+ if(action==="source_add"){
+  changed=await sql("INSERT INTO mm_sources(id,city,topic,active) VALUES($1,$2,$3,TRUE) ON CONFLICT(id) DO UPDATE SET city=EXCLUDED.city,topic=EXCLUDED.topic,active=TRUE,mode='trial',disabled_reason=NULL,disabled_at=NULL RETURNING id",id,String(data.city||"").slice(0,90),String(data.topic||"").slice(0,90));
+ }else if(action==="source_on"){
+  changed=await sql("UPDATE mm_sources SET active=TRUE,disabled_reason=NULL,disabled_at=NULL WHERE id=$1 RETURNING id",id);
+ }else if(action==="source_off"){
+  changed=await sql("UPDATE mm_sources SET active=FALSE WHERE id=$1 RETURNING id",id);
+ }else if(action==="approve"){
+  changed=await sql("UPDATE mm_jobs SET status='active' WHERE id=$1 AND status='pending' RETURNING *",id);
+  if(changed.length&&onApprove)await onApprove(changed[0]);
+ }else if(action==="reject"){
+  changed=await sql("UPDATE mm_jobs SET status='rejected' WHERE id=$1 AND status='pending' RETURNING id",id);
+ }else if(action==="block"){
+  changed=await sql("UPDATE mm_users SET blocked=TRUE WHERE id=$1 RETURNING id",id);
+  if(changed.length)await sql("UPDATE mm_jobs SET paused=TRUE WHERE owner=$1 AND status='active'",id);
+ }else if(action==="unblock"){
+  changed=await sql("UPDATE mm_users SET blocked=FALSE,suspended=FALSE WHERE id=$1 RETURNING id",id);
+ }else return json({error:"Неизвестное действие"},400);
+ if(!changed.length)return json({error:"Запись не найдена или уже обработана"},404);
+ await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,$1,$2::jsonb)",action,JSON.stringify({target:id,role:session.role}));
+ const messages={source_add:"Источник сохранён и включён.",source_on:"Источник включён.",source_off:"Источник отключён.",approve:"Заявка №"+id+" одобрена.",reject:"Заявка №"+id+" отклонена.",block:"Пользователь "+id+" заблокирован.",unblock:"Пользователь "+id+" разблокирован."};
+ return json({ok:true,message:messages[action]||"Действие выполнено."});
  }
  return json({error:"Not found"},404);
 }
