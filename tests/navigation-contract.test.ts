@@ -3,6 +3,7 @@ import {test,expect} from "bun:test";
 // Static navigation contract: no database or Telegram credentials are required.
 // This catches accidental removal of a handler while changing the main menu.
 const source=await Bun.file(new URL("../bot.ts",import.meta.url)).text();
+const dispatcherSource=await Bun.file(new URL("../telegram-dispatch.ts",import.meta.url)).text();
 const menuSource=source.slice(source.indexOf("const menu="),source.indexOf("const esc="));
 const actions=Object.fromEntries([
  ["profile",'if(a==="profile")'],
@@ -44,14 +45,15 @@ test("Telegram webhook durably queues messages and retries processing after fail
  expect(webhook).toContain('return new Response("ok")');
  expect(webhook).not.toContain('INSERT INTO mm_updates(id)');
  expect(worker).toContain("FOR UPDATE SKIP LOCKED");
- expect(worker).toContain('await call("answerCallbackQuery"');
- expect(worker).toContain("INSERT INTO mm_updates(id)");
+ expect(worker).toContain('acknowledge:callbackId=>call("answerCallbackQuery"');
+ expect(worker).toContain("return dispatchTelegramUpdate(x,{");
+ expect(dispatcherSource).toContain("INSERT INTO mm_updates(id)");
  expect(worker).toContain("Queued Telegram update failed");
  expect(worker).toContain('typeof row.payload==="string"?JSON.parse(row.payload):row.payload');
  expect(worker).toContain("Number.isSafeInteger(payload.update_id)");
  expect(worker).toContain("next_attempt_at=NOW()");
- expect(worker).toContain('console.error("Callback action failed"');
- expect(worker).toContain("Действие не завершилось из-за временной ошибки.");
+ expect(dispatcherSource).toContain('log.error("Callback action failed"');
+ expect(dispatcherSource).toContain("throw error;");
 });
 test("user-facing sample pages use clear fictional-example labels and no demo branding",()=>{
  const exampleMenu=source.slice(source.indexOf("function demoMenu()"),source.indexOf("let profileRefreshWorkerRunning"));
