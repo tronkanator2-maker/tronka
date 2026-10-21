@@ -13,6 +13,7 @@ import {renderJobsPage} from "./jobs-page.ts";
 import {demoPage,demoItem,demoRoute,demoProfiles,demoJobs} from "./demo-catalog.ts";
 import {prepareProfileRefreshQueue,queueProfileRefresh,runProfileRefreshBatch} from "./profile-refresh.ts";
 import {runProfileFanoutPage} from "./profile-fanout.ts";
+import {prepareProfileDeliveryProgress,deliverMatchedProfileProgress} from "./profile-delivery.ts";
 import {prepareGuideEditor,renderEditableGuide,editableGuideMenu} from "./guide-editor.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard,validateJobListing} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
@@ -110,6 +111,7 @@ await prepareAcceptedInvitationOutbox(sql);
 await prepareDecisionNotifications(sql);
 await prepareInvitationOutbox(sql);
 await prepareProfileRefreshQueue(sql);
+await prepareProfileDeliveryProgress(sql);
 await prepareDocuments(sql);
 await prepareGuideEditor(sql);
 await setupSourceHealth(sql);
@@ -187,15 +189,18 @@ function validProfile(p){
 function validJob(p){
  return validateJobListing(p);
 }
-async function profile(to,u,heading="Анкета",backToCatalog=null){
+async function profile(to,u,heading="Анкета",backToCatalog=null,delivery=null){
  if(!u.profile||!Object.keys(u.profile).length)return;
  const reviews=await feedbackSummary(u.id,sql);
- if((u.photos||[]).length>1){
-  const result=await call("sendMediaGroup",{chat_id:to,media:u.photos.slice(0,5).map(file=>({type:"photo",media:file}))});
-  if(!result.ok)throw Error("Telegram media group delivery failed");
- } else if(u.photo){
-  const photo=await call("sendPhoto",{chat_id:to,photo:u.photo});
-  if(!photo.ok)throw Error("Telegram profile photo delivery failed");
+ if(!delivery?.skipMedia){
+  if((u.photos||[]).length>1){
+   const result=await call("sendMediaGroup",{chat_id:to,media:u.photos.slice(0,5).map(file=>({type:"photo",media:file}))});
+   if(!result.ok)throw Error("Telegram media group delivery failed");
+  }else if(u.photo){
+   const photo=await call("sendPhoto",{chat_id:to,photo:u.photo});
+   if(!photo.ok)throw Error("Telegram profile photo delivery failed");
+  }
+  if(delivery?.onMediaSent)await delivery.onMediaSent();
  }
  const age=ageAt(get(u.profile,"дата рождения"));
  const content="<b>"+esc(heading)+"</b>\n"+
@@ -318,15 +323,10 @@ async function sendMatchedProfile(job,p){
  if(!payMatches(p.profile,job.body))return false;
  const city=get(job.body,"город").toLowerCase();
  if(city&&get(p.profile,"город")&&!get(p.profile,"город").toLowerCase().split(",").some(x=>city.includes(x.trim())))return false;
- const inserted=await sql("INSERT INTO mm_profile_deliveries(job_id,user_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING user_id",job.id,p.id);
- if(!inserted.length)return false;
- try {
- const notice=await send(job.owner,"Анкета по вашей заявке №"+job.id+" · "+esc(get(job.body,"название заявки")));
- if(!notice?.ok)throw Error("Profile notice not sent");
- const shown=await profile(job.owner,p,"Анкета подходящего участника");
- if(!shown?.ok)throw Error("Profile card not sent");
- return true;
- }catch(e){await sql("DELETE FROM mm_profile_deliveries WHERE job_id=$1 AND user_id=$2",job.id,p.id);throw e}
+ return deliverMatchedProfileProgress(sql,job.id,p.id,
+  ()=>send(job.owner,"Анкета по вашей заявке №"+job.id+" · "+esc(get(job.body,"название заявки"))),
+  delivery=>profile(job.owner,p,"Анкета подходящего участника",null,delivery)
+ );
 }
 async function profileBackfill(p){
  if(!eligibleProfile(p.profile,p.photo)||!allConsentsCurrent(p.consent,await currentDocumentHashes()))return;
