@@ -34,3 +34,15 @@ test("published legal document revisions show a safe owner-only history",()=>{
  expect(adminHtml).toContain("data?section=documents");
  expect(adminHtml).toContain('Опубликована редакция');
 });
+
+test("owner-only articles editor has real save and load handlers, without HTML injection",()=>{
+ expect(adminHtml).toContain('data-tab="articles" class="owner-only"');
+ for(const marker of ['id="articlesPane"','id="guideForm"','id="guideSlug"','id="guideTitle"','id="guideBody"','async function loadArticles()','function selectGuideRecord()','action:"guide_publish"']){
+  expect(adminHtml).toContain(marker);
+ }
+ expect(adminHtml).toContain('state.role!=="owner"&&["finance","documents","articles"');
+ expect(adminHtml).toContain('el("guideInfo").textContent=');
+ expect(adminHtml).not.toContain(".innerHTML=");
+ const script=adminHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1]||"";
+ expect(()=>new Function(script)).not.toThrow();
+});
