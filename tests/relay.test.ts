@@ -24,3 +24,27 @@ test("relay rate limit is controlled by database transaction",async()=>{
  expect(args).toEqual([13,20]);
  expect(await consumeRelayQuota(async()=>[],13,20)).toBe(false);
 });
+
+test("relay checks that BOTH accounts remain unblocked and unsuspended",async()=>{
+ let statement="";
+ const sql=async(q)=>{statement=q;return [{allowed:true}]};
+ expect(await relayAuthorized(sql,111,222)).toBe(true);
+ expect(statement).toContain("FROM mm_users sender JOIN mm_users recipient");
+ expect(statement).toContain("sender.blocked=FALSE");
+ expect(statement).toContain("sender.suspended=FALSE");
+ expect(statement).toContain("recipient.blocked=FALSE");
+ expect(statement).toContain("recipient.suspended=FALSE");
+ expect(statement).toContain("sender.id=$1");
+ expect(statement).toContain("recipient.id=$2");
+ // A previously accepted collaboration is insufficient when either party is blocked.
+ expect(statement).toContain("AND (");
+ expect(statement).toContain("status='accepted'");
+ const rejected=async()=>[{allowed:false}];
+ expect(await relayAuthorized(rejected,111,222)).toBe(false);
+});
+test("relay validates numeric Telegram IDs without truncating larger identifiers",async()=>{
+ let calls=0;const sql=async()=>{calls++;return [{allowed:true}]};
+ for(const invalid of [[1.5,3],[3,Infinity],[3,Number.MAX_SAFE_INTEGER+1],[-1,4],[3,3]])
+  expect(await relayAuthorized(sql,...invalid)).toBe(false);
+ expect(calls).toBe(0);
+});
