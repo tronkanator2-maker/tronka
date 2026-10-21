@@ -137,7 +137,7 @@ async function loadSummary(){
  const data=await api("data?section=summary");
  setAuthenticated(true,data.role);
  const x=data.stats||{};
- showKpis(el("kpis"),[["Пользователи",x.users],["Заявки",x.jobs],["На модерации",x.pending],["Отклики",x.responses],["Активные источники",x.active_sources],["Новые обращения",x.new_support_tickets],["Очередь рассылок",x.queued_job_broadcasts],["Недоставленные отклики",x.queued_responses]]);
+ showKpis(el("kpis"),[["Пользователи",x.users],["Заявки",x.jobs],["На модерации",x.pending],["Отклики",x.responses],["Активные источники",x.active_sources],["Новые обращения",x.new_support_tickets],["Очередь рассылок",x.queued_job_broadcasts],["Недоставленные отклики",x.queued_responses],["Ожидают Telegram",x.pending_telegram_updates],["Очередь статусов",x.queued_decision_notifications],["Подбор анкет",x.queued_profile_refreshes]]);
  el("summaryNote").textContent="Регистрация: "+(x.registration_enabled?"включена":"закрыта")+" · Юридические документы: "+(x.required_documents_ready?"подготовлены":"не утверждены")+" · Последний входящий Telegram update: "+fmt(x.latest_webhook_at);
 }
 const rowName=item=>(item.body&&typeof item.body==="object")?(item.body["название заявки"]||item.body["описание"]||"Без названия"):"—";
