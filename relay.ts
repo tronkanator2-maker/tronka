@@ -3,12 +3,18 @@ export async function relayAuthorized(sql,from,to){
  const a=Number(from),b=Number(to);
  if(!Number.isSafeInteger(a)||!Number.isSafeInteger(b)||a<=0||b<=0||a===b)return false;
  const rows=await sql(`SELECT (
-  EXISTS(SELECT 1 FROM mm_invitations
-         WHERE status='accepted'
-         AND ((from_user=$1 AND to_user=$2) OR (from_user=$2 AND to_user=$1)))
-  OR EXISTS(SELECT 1 FROM mm_responses r JOIN mm_jobs j ON j.id=r.job_id
-            WHERE r.status='accepted'
-            AND ((r.user_id=$1 AND j.owner=$2) OR (r.user_id=$2 AND j.owner=$1)))
+  EXISTS(SELECT 1 FROM mm_users sender JOIN mm_users recipient ON recipient.id=$2
+   WHERE sender.id=$1
+    AND sender.blocked=FALSE AND sender.suspended=FALSE
+    AND recipient.blocked=FALSE AND recipient.suspended=FALSE)
+  AND (
+   EXISTS(SELECT 1 FROM mm_invitations
+          WHERE status='accepted'
+          AND ((from_user=$1 AND to_user=$2) OR (from_user=$2 AND to_user=$1)))
+   OR EXISTS(SELECT 1 FROM mm_responses r JOIN mm_jobs j ON j.id=r.job_id
+             WHERE r.status='accepted'
+             AND ((r.user_id=$1 AND j.owner=$2) OR (r.user_id=$2 AND j.owner=$1)))
+  )
  ) AS allowed`,a,b);
  return rows[0]?.allowed===true;
 }
