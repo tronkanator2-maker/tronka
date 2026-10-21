@@ -50,7 +50,7 @@ footer{margin-top:30px}#login{max-width:500px;margin:10vh auto 0}#dashboard[hidd
 <button data-tab="jobs">Заявки</button><button data-tab="pending">Модерация</button>
 <button data-tab="reports">Обращения</button><button data-tab="sources">Источники</button>
 <button data-tab="candidates">Проверка источников</button><button data-tab="finance" class="owner-only">Финансы</button>
-<button data-tab="documents" class="owner-only">Документы</button>
+<button data-tab="documents" class="owner-only">Документы</button><button data-tab="articles" class="owner-only">Статьи</button>
 <button data-tab="audit" class="owner-only">Журнал действий</button><button data-tab="moderators" class="owner-only">Модераторы</button>
 </nav>
 <div class="panel" id="summaryPane"><div class="flex"><h2 class="grow">Состояние сервиса</h2><button id="refreshSummary">Обновить</button></div><div class="kpis" id="kpis"></div><p class="small" id="summaryNote"></p></div>
@@ -75,6 +75,14 @@ footer{margin-top:30px}#login{max-width:500px;margin:10vh auto 0}#dashboard[hidd
 <textarea name="body" rows="9" placeholder="Полный утверждённый текст" required></textarea>
 <button class="primary" type="submit">Опубликовать редакцию</button></form>
 <p><a href="/documents" target="_blank" rel="noopener noreferrer">Открыть публичные документы ↗</a></p><h2>История опубликованных редакций</h2><div id="documentHistory" class="table-wrap"></div></div>
+<div id="articlesPane" class="panel hide"><h2>Статьи и тексты справки</h2>
+<p>Здесь владелец может редактировать полезные статьи и помощь бота без изменения кода. Это <b>не</b> юридические документы и не согласия пользователей. Каждая редакция сохраняется с номером версии.</p>
+<form id="guideForm"><div class="form-grid">
+<select name="slug" id="guideSlug" required><option value="getting-started">Как начать</option><option value="portfolio">Портфолио</option><option value="safe-casting">Безопасность</option><option value="posting">Разместить заявку</option></select>
+<input name="title" id="guideTitle" maxlength="120" placeholder="Заголовок статьи" required></div>
+<textarea name="body" id="guideBody" rows="11" minlength="20" maxlength="3900" placeholder="Текст статьи. Пишите обычным текстом; Telegram разметит его безопасно." required></textarea>
+<div class="flex"><button class="primary" type="submit">Сохранить новую редакцию</button><span id="guideInfo" class="small" aria-live="polite"></span></div>
+</form></div>
 </section><footer class="small">Панель управления «Мир моделей». Все изменения сохраняются на сервере.</footer>
 <script>
 (function(){
@@ -90,7 +98,7 @@ const sections={
  moderators:{title:"Модераторы",columns:[["id","№"],["username","Логин"],["active","Активен"],["created_at","Создан"],["updated_at","Изменён"]]},
  audit:{title:"Журнал действий",columns:[["id","№"],["actor","Система"],["action","Действие"],["details","Детали"],["created_at","Когда"]]}
 };
-const state={role:"owner",section:"summary",page:1,pages:1,q:"",busy:false};
+const state={role:"owner",section:"summary",page:1,pages:1,q:"",busy:false,guides:[]};
 const notice=(message,error=false)=>{let box=el("notice");box.textContent=message;box.className=error?"error":"";box.style.display="block"};
 const fmt=v=>{
  if(v===null||v===undefined||v==="")return "—";
@@ -230,9 +238,21 @@ async function loadDocuments(){
  }
  table.appendChild(body);root.appendChild(table);
 }
+function selectGuideRecord(){
+ const slug=el("guideSlug").value;
+ const guide=state.guides.find(g=>g.slug===slug);
+ el("guideTitle").value=guide?guide.title:"";
+ el("guideBody").value=guide?guide.body:"";
+ el("guideInfo").textContent=guide?(guide.version?"Опубликована редакция №"+guide.version:"Исходный текст, ещё не редактировался"):"Статья не найдена";
+}
+async function loadArticles(){
+ const data=await api("data?section=articles");
+ state.guides=data.articles||[];
+ selectGuideRecord();
+}
 async function selectTab(section){
- if(!["summary","finance","documents"].includes(section)&&!sections[section])return;
- if(state.role!=="owner"&&["finance","documents","audit","moderators"].includes(section))return;
+ if(!["summary","finance","documents","articles"].includes(section)&&!sections[section])return;
+ if(state.role!=="owner"&&["finance","documents","articles","audit","moderators"].includes(section))return;
  state.section=section;state.page=1;state.q="";
  el("search").value="";
  document.querySelectorAll("nav [data-tab]").forEach(b=>b.setAttribute("aria-current",b.dataset.tab===section?"page":"false"));
@@ -240,6 +260,7 @@ async function selectTab(section){
  el("listPane").classList.toggle("hide",!sections[section]);
  el("financePane").classList.toggle("hide",section!=="finance");
  el("documentsPane").classList.toggle("hide",section!=="documents");
+ el("articlesPane").classList.toggle("hide",section!=="articles");
  el("sourceAdd").classList.toggle("hide",section!=="sources"||state.role!=="owner");
  el("moderatorAdd").classList.toggle("hide",section!=="moderators"||state.role!=="owner");
  if(sections[section]){
@@ -248,6 +269,7 @@ async function selectTab(section){
   await loadList();
  }else if(section==="finance")await loadFinance();
  else if(section==="documents")await loadDocuments();
+  else if(section==="articles")await loadArticles();
  else if(section==="summary")await loadSummary();
 }
 async function boot(){
@@ -279,6 +301,19 @@ el("moderatorForm").onsubmit=async event=>{
  try{
   const data=await api("action",{action:"moderator_create",username:form.get("username"),password:form.get("password")});
   notice(data.message||"Модератор создан");event.target.reset();await loadList();
+ }catch(error){notice(error.message,true)}
+};
+el("guideSlug").onchange=()=>selectGuideRecord();
+el("guideForm").onsubmit=async event=>{
+ event.preventDefault();
+ if(!confirm("Опубликовать новую редакцию справочной статьи? Юридические документы это не изменит."))return;
+ const form=new FormData(event.target);
+ try{
+  const slug=String(form.get("slug"));
+  const result=await api("action",{action:"guide_publish",slug,title:form.get("title"),body:form.get("body")});
+  notice(result.message||"Справка обновлена");
+  await loadArticles();
+  el("guideSlug").value=slug;selectGuideRecord();
  }catch(error){notice(error.message,true)}
 };
 el("documentForm").onsubmit=async event=>{
