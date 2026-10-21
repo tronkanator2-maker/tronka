@@ -1,5 +1,6 @@
 import {SQL} from "bun";
 import {decodeDbRows} from "./db-json.ts";
+import {loadTelegramUser} from "./telegram-user.ts";
 import {parseStartTarget,parseOnboardTarget,parseReferralStart,parseReferralOnboard} from "./deep-links.ts";
 import {leavingToHome} from "./navigation-state.ts";
 import {resumeMenu} from "./resume-menu.ts";
@@ -123,21 +124,7 @@ const send=async(id,text,markup)=>{
 };
 const buttons=rows=>({inline_keyboard:rows.map(row=>row.map(([text,callback_data])=>({text,callback_data})))});
 async function change(id,fields){let sets=[],vals=[];for(const [k,v] of Object.entries(fields)){const json=v!==null&&typeof v==="object";vals.push(json?JSON.stringify(v):v);sets.push(k+"=$"+vals.length+(json?"::jsonb":""));}vals.push(id);await sql("UPDATE mm_users SET "+sets.join(",")+" WHERE id=$"+vals.length,...vals)}
-async function who(f){
- await sql("INSERT INTO mm_users(id,username,first_name) VALUES($1,$2,$3) ON CONFLICT(id) DO UPDATE SET username=EXCLUDED.username,first_name=EXCLUDED.first_name RETURNING id",f.id,f.username||null,f.first_name||"");
- const size=(await sql("SELECT octet_length(filters::text)::int AS filters_bytes,octet_length(profile::text)::int AS profile_bytes FROM mm_users WHERE id=$1",f.id))[0];
- if(size.filters_bytes>131072){
-  await sql("INSERT INTO mm_user_recovery(user_id,field,value) SELECT id,'filters',filters FROM mm_users WHERE id=$1 ON CONFLICT(user_id,field) DO NOTHING",f.id);
-  await sql("UPDATE mm_users SET filters='{}'::jsonb,state='' WHERE id=$1",f.id);
-  console.warn("Oversized user filters moved to recovery",f.id,size.filters_bytes);
- }
- if(size.profile_bytes>262144){
-  await sql("INSERT INTO mm_user_recovery(user_id,field,value) SELECT id,'profile',profile FROM mm_users WHERE id=$1 ON CONFLICT(user_id,field) DO NOTHING",f.id);
-  await sql("UPDATE mm_users SET profile='{}'::jsonb WHERE id=$1",f.id);
-  console.warn("Oversized user profile moved to recovery",f.id,size.profile_bytes);
- }
- return(await sql("SELECT * FROM mm_users WHERE id=$1",f.id))[0];
-}
+async function who(from){return loadTelegramUser(sql,from)}
 const consentNames=["Оферта и правила сервиса","Обработка персональных данных","Показ анкеты другим"];
 const inviteCreationQueue=createConsentEditQueue();
 let cachedDocHashes=null,cachedDocHashesUntil=0;
