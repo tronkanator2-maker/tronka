@@ -16,6 +16,7 @@ import {getGuide,guideMenu} from "./guides.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard,validateJobListing} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
 import {dispatchTelegramUpdate} from "./telegram-dispatch.ts";
+import {prepareDecisionNotifications,updateCollaborationDecision,deliverDecisionNotifications} from "./decision-notifications.ts";
 import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
 import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer,toggleProfileRole,canFinishWizardNow,structuredProfileErrors} from "./profile-wizard.ts";
 import {isTestMode,canRegister,canUseTestFeatures,createConsentEditQueue,revokeTestAccess,testMenuText} from "./test-mode.ts";
@@ -105,6 +106,7 @@ await prepareEntitlements(sql);
 await prepareRelay(sql);
 await prepareAcceptedResponseOutbox(sql);
 await prepareAcceptedInvitationOutbox(sql);
+await prepareDecisionNotifications(sql);
 await prepareInvitationOutbox(sql);
 await prepareProfileRefreshQueue(sql);
 await prepareDocuments(sql);
@@ -848,11 +850,11 @@ if(a==="more")return send(id,"⚙️ <b>Дополнительно</b>\nИнфо
   return send(id,"✉️ <b>Ваши приглашения</b>\n\n"+lines.join("\n"),buttons(rows));
  }
  if(a.startsWith("cancelinvite:")){
-  const inviteId=Number(a.slice("cancelinvite:".length));
-  const rows=await sql("UPDATE mm_invitations SET status='cancelled' WHERE id=$1 AND from_user=$2 AND status='sent' RETURNING to_user",inviteId,id);
-  if(!rows.length)return send(id,"Приглашение уже обработано.");
-  try{await send(rows[0].to_user,"Входящее приглашение №"+inviteId+" отменено отправителем.")}catch(e){console.error("Invite cancellation notice",String(e))}
-  return send(id,"Приглашение отменено. Контакты не раскрыты.");
+  const decision=await updateCollaborationDecision(sql,"invitation_cancelled",a.slice("cancelinvite:".length),id);
+  if(!decision)return send(id,"Приглашение недоступно либо уже принято или отклонено.");
+  return send(id,decision.newlyChanged?
+   "Приглашение отменено. Контакты не раскрыты. Уведомление поставлено в очередь.":
+   "Приглашение уже отменено. Уведомление в очереди или доставлено.");
  }
  if(a==="invitefriend"){
  const whoAmI=await call("getMe",{});const name=whoAmI.ok?whoAmI.result.username:(Bun.env.BOT_USERNAME||"").replace(/^@/,"");
@@ -1178,14 +1180,13 @@ if(a.startsWith("invite:"))return inviteCreationQueue(id,async()=>{
   return send(id,"✅ Приглашение №"+invited.id+" сохранено и поставлено в очередь. Бот отправит анкету и кнопки принятия/отклонения.",buttons([[["✉️ Мои приглашения","myinvites"],["🏠 В меню","home"]]]));
  });
  if(a.startsWith("rejectinvite:")){
- const invitationId=Number(a.slice("rejectinvite:".length));
- const rows=await sql("UPDATE mm_invitations SET status='declined' WHERE id=$1 AND to_user=$2 AND status='sent' RETURNING from_user",invitationId,id);
- if(!rows.length)return send(id,"Приглашение уже обработано.");
- await send(id,"Приглашение отклонено. Контакты не раскрывались.");
- await send(rows[0].from_user,"Приглашение было отклонено.");
- return;
-}
-if(a.startsWith("acceptinvite:")){
+  const decision=await updateCollaborationDecision(sql,"invitation_declined",a.slice("rejectinvite:".length),id);
+  if(!decision)return send(id,"Приглашение недоступно или уже обработано.");
+  return send(id,decision.newlyChanged?
+   "Приглашение отклонено. Контакты не раскрывались. Уведомление поставлено в очередь.":
+   "Приглашение уже отклонено. Уведомление в очереди или доставлено.");
+ }
+ if(a.startsWith("acceptinvite:")){
   const inviteId=Number(a.slice("acceptinvite:".length));
   const invitation=await acceptInvitationForRecipient(sql,inviteId,id);
   if(!invitation)return send(id,"Приглашение недоступно, отклонено или отправитель ограничен.",buttons([[["✉️ Мои приглашения","myinvites"],["🏠 В меню","home"]]]));
@@ -1209,13 +1210,13 @@ if(a.startsWith("acceptinvite:")){
    buttons([[["💬 Написать участнику","relay:"+accepted.userId]],[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
  }
  if(a.startsWith("declineresponse:")){
- const rId=Number(a.slice("declineresponse:".length));
- const rows=await sql("UPDATE mm_responses r SET status='declined' FROM mm_jobs j WHERE r.id=$1 AND r.job_id=j.id AND j.owner=$2 AND r.status='pending' RETURNING r.id,r.user_id",rId,id);
- if(!rows.length)return send(id,"Отклик уже обработан.");
- try{await send(rows[0].user_id,"К сожалению, ваш отклик №"+rId+" отклонён. Другие заявки можно найти в главном меню.")}catch(e){console.error("Declined response notification",String(e))}
- return send(id,"Отклик отклонён, участнику отправлено уведомление.");
-}
-if(a.startsWith("reportjob:")||a.startsWith("reportuser:")||a==="report"||a==="support"){const f={...(u.filters||{})};f.reportTarget=a.startsWith("reportjob:")?{job:Number(a.slice(10))}:a.startsWith("reportuser:")?{user:Number(a.slice(11))}:{};await change(id,{state:"support",filters:f});return send(id,"Опишите причину своими словами. Можно приложить скриншот.")}
+  const decision=await updateCollaborationDecision(sql,"response_declined",a.slice("declineresponse:".length),id);
+  if(!decision)return send(id,"Отклик недоступен либо уже принят.");
+  return send(id,decision.newlyChanged?
+   "Отклик отклонён, уведомление участнику поставлено в очередь.":
+   "Отклик уже отклонён. Уведомление в очереди или доставлено.");
+ }
+ if(a.startsWith("reportjob:")||a.startsWith("reportuser:")||a==="report"||a==="support"){const f={...(u.filters||{})};f.reportTarget=a.startsWith("reportjob:")?{job:Number(a.slice(10))}:a.startsWith("reportuser:")?{user:Number(a.slice(11))}:{};await change(id,{state:"support",filters:f});return send(id,"Опишите причину своими словами. Можно приложить скриншот.")}
  // Old or malformed inline keyboards must always give feedback instead of doing nothing.
  return send(id,"Эта кнопка больше не действует. Откройте нужный раздел через меню.",buttons([[["🏠 Главное меню","home"],["❓ Поддержка","support"]]]));
 }
@@ -1358,6 +1359,14 @@ async function saveReport(u,txt,photo=null){
  await send(u.id,"Обращение записано. Модератор сможет его проверить.");
 }
 
+let decisionNotificationsWorkerRunning=false;
+async function processDecisionNotifications(){
+ if(decisionNotificationsWorkerRunning)return;
+ decisionNotificationsWorkerRunning=true;
+ try{await ensure();await deliverDecisionNotifications(sql,send)}
+ finally{decisionNotificationsWorkerRunning=false}
+}
+
 let initialInvitationWorkerRunning=false;
 let telegramUpdateWorkerRunning=false;
 async function handleTelegramUpdate(x){
@@ -1456,6 +1465,7 @@ setInterval(()=>ensure().then(()=>feedbackTick(sql,send)).catch(e=>console.error
 setInterval(()=>runFanoutBatch().catch(e=>console.error("fanout tick",String(e))),5000);
 setInterval(()=>processResponseOutbox().catch(e=>console.error("response outbox tick",String(e))),5000);
 setInterval(()=>processAcceptedResponseOutbox().catch(e=>console.error("accepted response outbox tick",String(e))),5000);
+setInterval(()=>processDecisionNotifications().catch(e=>console.error("decision notice tick",String(e))),5000);
 setInterval(()=>processAcceptedInvitationOutbox().catch(e=>console.error("accepted invitation outbox tick",String(e))),5000);
 setInterval(()=>processInvitationOutbox().catch(e=>console.error("initial invitation outbox tick",String(e))),5000);
 setInterval(()=>processProfileRefresh().catch(e=>console.error("profile refresh tick",String(e))),7500);
@@ -1470,6 +1480,7 @@ setInterval(()=>ensure().then(async()=>{
  }).catch(e=>console.error("maintenance",String(e))),24*60*60*1000);
 setTimeout(()=>runFanoutBatch().catch(e=>console.error("fanout startup",String(e))),4000);
 setTimeout(()=>processAcceptedResponseOutbox().catch(e=>console.error("accepted response startup",String(e))),7000);
+setTimeout(()=>processDecisionNotifications().catch(e=>console.error("decision notice startup",String(e))),7100);
 setTimeout(()=>processAcceptedInvitationOutbox().catch(e=>console.error("accepted invitation startup",String(e))),7500);
 setTimeout(()=>processInvitationOutbox().catch(e=>console.error("initial invitation startup",String(e))),8000);
 setTimeout(()=>processProfileRefresh().catch(e=>console.error("profile refresh startup",String(e))),8500);
