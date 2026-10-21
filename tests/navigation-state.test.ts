@@ -24,3 +24,16 @@ test("Home cancels a pending permanent deletion rather than confirming it",()=>{
  const outcome=leavingToHome({state:"delete_confirm",filters:{}});
  expect(outcome.state).toBe("");
 });
+
+test("Home keeps profile and job confirmations active so Save/Publish buttons still work",()=>{
+ for(const state of ["profile_confirm","job_confirm","job_edit_confirm"]){
+  const draft={state,filters:{draft:{город:"Москва"},profileDraft:{имя:"Анна"},draftJobId:25}};
+  expect(leavingToHome(draft)).toBeNull();
+  expect(draft.state).toBe(state);
+ }
+});
+test("Home still stops active free-text job and profile editing",()=>{
+ for(const state of ["profile","job","job_edit"]){
+  expect(leavingToHome({state,filters:{draftJobId:25}}).state).toBe("");
+ }
+});
