@@ -2,6 +2,7 @@ import {SQL} from "bun";
 import {decodeDbRows} from "./db-json.ts";
 import {parseStartTarget,parseOnboardTarget,parseReferralStart,parseReferralOnboard} from "./deep-links.ts";
 import {leavingToHome} from "./navigation-state.ts";
+import {resumeMenu} from "./resume-menu.ts";
 import {prepareAcceptedResponseOutbox,acceptResponseForOwner,deliverAcceptedResponses} from "./response-acceptance.ts";
 import {prepareAcceptedInvitationOutbox,acceptInvitationForRecipient,deliverAcceptedInvitations} from "./invite-acceptance.ts";
 import {prepareInvitationOutbox,queueInitialInvitation,deliverPendingInvitations} from "./invitation-delivery.ts";
@@ -160,8 +161,8 @@ async function begin(u){
  if(u.blocked||u.suspended)return send(u.id,"Аккаунт ограничен. Напишите /support или используйте /mydata.");
  if(!testReady()||(!testMode()&&!(await legalReady(sql))))return registrationPreview(u.id);
  if(testMode()){
-  const resume=u.state==="wizard"?[[{text:"▶️ Продолжить анкету",callback_data:"wizard:resume"},{text:"❌ Отменить",callback_data:"wizard:cancel"}]]:u.state==="profile_confirm"?[[{text:"✅ Сохранить черновик",callback_data:"profile_save"},{text:"✏️ Исправить",callback_data:"edit_profile"}]]:u.filters?.profileDraft?[[{text:"📝 Вернуться к черновику",callback_data:"edit_profile"},{text:"❌ Отменить",callback_data:"wizard:cancel"}]]:u.state==="job_wizard"?[[{text:"▶️ Продолжить заявку",callback_data:"jobwizard:resume"},{text:"❌ Отменить",callback_data:"jobwizard:cancel"}]]:u.state==="job_confirm"?[[{text:"✅ Опубликовать заявку",callback_data:"publish"},{text:"✏️ Исправить",callback_data:"job_template"}]]:[];
-  return send(u.id,testMenuText+(resume.length?"\n\n📝 У вас есть незавершённая анкета.":""),{inline_keyboard:[...resume,...menu.inline_keyboard]});
+  const resume=resumeMenu(u);
+  return send(u.id,testMenuText+(resume.label?"\n\n📝 "+resume.label:""),{inline_keyboard:[...resume.rows,...menu.inline_keyboard]});
  }
  const hashes=await currentDocumentHashes();
  if(!fullConsentsCurrent(u.consent,hashes))return send(u.id,"<b>Добро пожаловать в Мир моделей!</b>\nОзнакомьтесь с документами и дайте три отдельных согласия.",consentBoard(u,hashes));
