@@ -12,7 +12,7 @@ import {renderJobsPage} from "./jobs-page.ts";
 import {demoPage,demoItem,demoRoute,demoProfiles,demoJobs} from "./demo-catalog.ts";
 import {prepareProfileRefreshQueue,queueProfileRefresh,runProfileRefreshBatch} from "./profile-refresh.ts";
 import {runProfileFanoutPage} from "./profile-fanout.ts";
-import {getGuide,guideMenu} from "./guides.ts";
+import {prepareGuideEditor,renderEditableGuide,editableGuideMenu} from "./guide-editor.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard,validateJobListing} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
 import {dispatchTelegramUpdate} from "./telegram-dispatch.ts";
@@ -110,6 +110,7 @@ await prepareDecisionNotifications(sql);
 await prepareInvitationOutbox(sql);
 await prepareProfileRefreshQueue(sql);
 await prepareDocuments(sql);
+await prepareGuideEditor(sql);
 await setupSourceHealth(sql);
 
 }
@@ -628,7 +629,7 @@ async function onMessage(m){
  if(m.chat?.type&&m.chat.type!=="private"){await onSourcePost(m);return}
  const text=String(m.text||"");
  if(text==="/examples")return demoScreen(m.from.id);
-  if(text==="/help")return send(m.from.id,getGuide("getting-started").text,buttons([[["📚 Другие материалы","articles"],["✨ Начать","onboard:home"]]]));
+  if(text==="/help")return send(m.from.id,await renderEditableGuide(sql,"getting-started"),buttons([[["📚 Другие материалы","articles"],["✨ Начать","onboard:home"]]]));
  if(text==="/id")return send(m.from.id,"Telegram ID: <code>"+m.from.id+"</code>");
  if(text.startsWith("/start")&&(Bun.env.REGISTRATION_ENABLED!=="true"||(!testMode()&&!(await legalReady(sql))))){
   return registrationPreview(m.from.id);
@@ -741,12 +742,12 @@ async function onCallback(c){
  }
  if(c.data?.startsWith("demo:"))return demoScreen(c.from.id,c.data.slice(5));
  if(c.data==="docs")return send(c.from.id,"Документы сервиса: "+esc((Bun.env.PUBLIC_URL||"").replace(/\/$/,"")+"/documents"));
-  if(c.data==="articles")return send(c.from.id,"📚 <b>Полезные материалы</b>\nВыберите тему:",buttons([...guideMenu().map(([title,key])=>[[title,key]]),[["◀️ В меню","home"]]]));
-  if(c.data==="how")return send(c.from.id,getGuide("getting-started").text,buttons([[["📚 Материалы","articles"],["✨ Начать","onboard:home"]]]));
+  if(c.data==="articles")return send(c.from.id,"📚 <b>Полезные материалы</b>\nВыберите тему:",buttons([...(await editableGuideMenu(sql)).map(([title,key])=>[[title,key]]),[["◀️ В меню","home"]]]));
+  if(c.data==="how")return send(c.from.id,await renderEditableGuide(sql,"getting-started"),buttons([[["📚 Материалы","articles"],["✨ Начать","onboard:home"]]]));
   if(c.data?.startsWith("guide:")){
-   const g=getGuide(c.data.slice(6));
-   if(!g)return send(c.from.id,"Материал не найден.",buttons([[["📚 Все статьи","articles"]]]));
-   return send(c.from.id,g.text,buttons([[["📚 Другие материалы","articles"],["🏠 В меню","home"]]]));
+   const article=await renderEditableGuide(sql,c.data.slice(6));
+   if(!article)return send(c.from.id,"Материал не найден.",buttons([[["📚 Все статьи","articles"]]]));
+   return send(c.from.id,article,buttons([[["📚 Другие материалы","articles"],["🏠 В меню","home"]]]));
   }
 
  let u=await who(c.from),id=u.id,a=String(c.data||"");
@@ -808,7 +809,7 @@ if(a==="more")return send(id,"⚙️ <b>Дополнительно</b>\nИнфо
  [["🧩 Что уже работает","feature_status"]],
  [["💳 Доступ и подписка","access_info"],["🏠 В меню","home"]]
 ]));
- if(a==="how")return send(id,getGuide("getting-started").text,buttons([[["📚 Все материалы","articles"],["🏠 В меню","home"]]]));
+ if(a==="how")return send(id,await renderEditableGuide(sql,"getting-started"),buttons([[["📚 Все материалы","articles"],["🏠 В меню","home"]]]));
  if(a==="feature_status")return send(id,`🧩 <b>Что уже работает</b>
 
 ✅ Анкета и фотографии
