@@ -1,6 +1,7 @@
 import {publishDocument,legalReady,latestDocuments} from "./documents.ts";
 import {inferCity} from "./engine.ts";
 import {adminHtml} from "./admin-ui.ts";
+import {listGuideEditors,publishGuideRevision} from "./guide-editor.ts";
 import {prepareModerators,createModerator,authenticateModerator,updateModeratorStatus} from "./admin-moderators.ts";
 import {ADMIN_SECTIONS,readAdminList,readFinanceSummary,canAdminAct} from "./admin-data.ts";
 // Minimal secured operational dashboard. Disabled until ADMIN_PASSWORD is configured.
@@ -73,6 +74,10 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
  }
  if(url.pathname==="/admin/data"&&req.method==="GET"){
   const section=String(url.searchParams.get("section")||"summary");
+  if(section==="articles"){
+   if(session.role!=="owner")return json({error:"Редактировать статьи может только владелец"},403);
+   return json({role:session.role,articles:await listGuideEditors(sql)});
+  }
   if(section==="finance"){
    if(session.role!=="owner")return json({error:"Только владелец может просматривать финансы"},403);
    return json({role:session.role,finance:await readFinanceSummary(sql)});
@@ -109,6 +114,14 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
     await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,'moderator_create',$1::jsonb)",JSON.stringify({moderator_id:moderator.id,username:moderator.username,by:session.principalName}));
     return json({ok:true,moderator,message:"Модератор "+moderator.username+" создан. Передайте ему логин и пароль отдельно."});
    }catch(e){return json({error:String(e.message||e)},400)}
+  }
+  if(action==="guide_publish"){
+    try{
+     const guide=await publishGuideRevision(sql,data.slug,data.title,data.body,session.principalName);
+     await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,'guide_publish',$1::jsonb)",
+      JSON.stringify({slug:guide.slug,version:guide.version,by:session.principalName,role:session.role}));
+     return json({ok:true,guide,message:"Статья обновлена. Версия №"+guide.version});
+    }catch(err){return json({error:String(err.message||err)},400)}
   }
   if(action==="document_publish"){
     try {
