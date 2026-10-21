@@ -15,6 +15,7 @@ import {runProfileFanoutPage} from "./profile-fanout.ts";
 import {getGuide,guideMenu} from "./guides.ts";
 import {jobWizardFields,jobWizardField,jobWizardFinished,validateJobWizardAnswer,jobWizardFilters,clearJobWizard,validateJobListing} from "./job-wizard.ts";
 import {relayAuthorized,prepareRelay,consumeRelayQuota} from "./relay.ts";
+import {dispatchTelegramUpdate} from "./telegram-dispatch.ts";
 import {profileDraftOf,stageProfileDraft,discardProfileDraft,mergeProfilePhoto} from "./profile-draft.ts";
 import {WIZARD_ROLES,wizardFields,wizardField,wizardCompleted,wizardAnswer,toggleProfileRole,canFinishWizardNow,structuredProfileErrors} from "./profile-wizard.ts";
 import {isTestMode,canRegister,canUseTestFeatures,createConsentEditQueue,revokeTestAccess,testMenuText} from "./test-mode.ts";
@@ -1360,19 +1361,10 @@ async function saveReport(u,txt,photo=null){
 let initialInvitationWorkerRunning=false;
 let telegramUpdateWorkerRunning=false;
 async function handleTelegramUpdate(x){
- const completed=await sql("SELECT id FROM mm_updates WHERE id=$1",x.update_id);
- if(completed.length)return;
- if(x.callback_query?.id){try{await call("answerCallbackQuery",{callback_query_id:x.callback_query.id})}catch(e){console.warn("Callback acknowledgment failed",String(e))}}
- if(x.message?.from||x.message?.chat?.type!=="private")if(x.message)await onMessage(x.message);
- if(x.channel_post)await onSourcePost(x.channel_post);
- if(x.callback_query?.from){
-  try{await onCallback(x.callback_query)}catch(e){
-   console.error("Callback action failed",JSON.stringify({updateId:x.update_id,userId:x.callback_query.from.id,action:x.callback_query.data,error:String(e),stack:e?.stack||""}));
-   try{await send(x.callback_query.from.id,"Действие не завершилось из-за временной ошибки. Попробуйте ещё раз или отправьте /start.",buttons([[ ["🏠 Главное меню","home"],["❓ Поддержка","support"] ]]));}
-   catch(notifyError){console.error("Callback error notice failed",String(notifyError))}
-  }
- }
- await sql("INSERT INTO mm_updates(id) VALUES($1) ON CONFLICT DO NOTHING",x.update_id);
+ return dispatchTelegramUpdate(x,{
+  sql,onMessage,onSourcePost,onCallback,
+  acknowledge:callbackId=>call("answerCallbackQuery",{callback_query_id:callbackId})
+ });
 }
 async function processTelegramUpdateQueue(){
  if(telegramUpdateWorkerRunning)return;
