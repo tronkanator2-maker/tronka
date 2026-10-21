@@ -11,6 +11,7 @@ test("admin routes enforce login, moderator restrictions and valid action result
   calls.push({query,args});
   if(query.includes("COUNT(*) FILTER"))return [{manually_enabled:3,trial_active:2,overlap:1}];
   if(query.includes("UPDATE mm_reports_v2"))return [{id:42}];
+  if(query.includes("INSERT INTO mm_guide_revisions"))return [{slug:"portfolio",version:1,title:"Портфолио",created_at:"2026-10-22"}];
   return [];
  };
  const req=(path,method="GET",data=null,cookie="")=>new Request("https://panel.example"+path,{
@@ -26,6 +27,19 @@ test("admin routes enforce login, moderator restrictions and valid action result
   expect(own.status).toBe(200);
   expect((await own.json()).role).toBe("owner");
   const ownerCookie=own.headers.get("set-cookie").split(";")[0];
+  const articles=await adminApp(req("/admin/data?section=articles","GET",null,ownerCookie),sql);
+  expect(articles.status).toBe(200);
+  const articleData=await articles.json();
+  expect(articleData.articles).toHaveLength(4);
+  const updatedArticle=await adminApp(req("/admin/action","POST",{
+   action:"guide_publish",slug:"portfolio",title:"Портфолио",
+   body:"Это полезные советы по подготовке портфолио для съёмок."
+  },ownerCookie),sql);
+  expect(updatedArticle.status).toBe(200);
+  expect((await updatedArticle.json()).guide.version).toBe(1);
+  expect(calls.some(x=>x.query.includes("'guide_publish'"))).toBe(true);
+  const invalidArticle=await adminApp(req("/admin/action","POST",{action:"guide_publish",slug:"offer",title:"Недопустимо",body:"Нельзя редактировать юридические согласия через справку."},ownerCookie),sql);
+  expect(invalidArticle.status).toBe(400);
   const finances=await adminApp(req("/admin/data?section=finance","GET",null,ownerCookie),sql);
   expect(finances.status).toBe(200);
   expect((await finances.json()).finance.recognized_revenue).toBeNull();
@@ -33,6 +47,12 @@ test("admin routes enforce login, moderator restrictions and valid action result
   expect(mod.status).toBe(200);
   expect((await mod.json()).role).toBe("moderator");
   const moderatorCookie=mod.headers.get("set-cookie").split(";")[0];
+  expect((await adminApp(req("/admin/data?section=articles","GET",null,moderatorCookie),sql)).status).toBe(403);
+  expect((await adminApp(req("/admin/action","POST",{
+   action:"guide_publish",slug:"portfolio",title:"Тест",
+   body:"Попытка модератора изменить справочные материалы."
+  },moderatorCookie),sql)).status).toBe(403);
+
   expect((await adminApp(req("/admin/data?section=finance","GET",null,moderatorCookie),sql)).status).toBe(403);
   expect((await adminApp(req("/admin/data?section=audit","GET",null,moderatorCookie),sql)).status).toBe(403);
   expect((await adminApp(req("/admin/action","POST",{action:"document_publish",slug:"offer",title:"Bad",body:"Bad"},moderatorCookie),sql)).status).toBe(403);
