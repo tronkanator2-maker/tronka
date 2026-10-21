@@ -1,9 +1,9 @@
 // Navigation must end the active text-input state when a user returns home.
-// Wizard states are intentionally excluded: the main menu offers Resume for them.
+// Wizard and confirmation states are intentionally excluded: Home offers Resume.
+// The saved confirmation must stay active so Publish/Save still works after /start.
 export const HOME_EXIT_STATES=new Set([
  "support","relay","reply_compose","browse_city","filter","photo",
- "profile","profile_confirm","job","job_confirm","job_edit",
- "job_edit_confirm","delete_confirm"
+ "profile","job","job_edit","delete_confirm"
 ]);
 export function leavingToHome(user){
  if(!HOME_EXIT_STATES.has(user?.state))return null;
