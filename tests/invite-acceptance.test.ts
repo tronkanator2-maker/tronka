@@ -112,3 +112,19 @@ test("invitation outbox table and pending index are created at setup",async()=>{
  expect(commands[0]).toContain("ON DELETE CASCADE");
  expect(commands[1]).toContain("completed_at IS NULL");
 });
+
+test("invitation acceptance checks both accounts for blocked and suspended statuses",async()=>{
+ const queries=[];
+ const sql=async (query,...args)=>{queries.push({query,args});return []};
+ expect(await acceptInvitationForRecipient(sql,37,44)).toBeNull();
+ expect(queries.length).toBe(2);
+ const active=queries[0].query;
+ expect(active).toContain("s.id=i.from_user AND s.blocked=FALSE AND s.suspended=FALSE");
+ expect(active).toContain("recipient.id=i.to_user AND recipient.blocked=FALSE AND recipient.suspended=FALSE");
+ expect(active).toContain("i.to_user=$2");
+ const retry=queries[1].query;
+ expect(retry).toContain("sender.blocked=FALSE");
+ expect(retry).toContain("recipient.blocked=FALSE");
+ expect(retry).toContain("sender.suspended=FALSE");
+ expect(retry).toContain("recipient.suspended=FALSE");
+});
