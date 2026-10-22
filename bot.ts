@@ -32,7 +32,7 @@ import {exportAccount,deleteAccount,sendAccountExport} from "./privacy.ts";
 import {parseWithModel} from "./ai-parser.ts";
 import {prepareDocuments,legalReady as legalDocumentsReady,recordConsent,publicDocumentRoute,latestDocuments,documentHashes,allConsentsCurrent as fullConsentsCurrent,consentIsCurrent} from "./documents.ts";
 import {prepareEntitlements,startPhoneTrial,hasPaidAccess as activeSubscription,weekStartMoscow} from "./access.ts";
-import {createResponseWithQuota,createInvitationWithQuota,publishJobWithQuota} from "./quota-actions.ts";
+import {createResponseWithQuota,createInvitationWithQuota,publishJobWithQuota,changeJobVisibilityWithQuota} from "./quota-actions.ts";
 import {setupFeedback, scheduleFeedback, feedbackTick, feedbackCallback, feedbackText, feedbackSummary} from "./feedback.ts";
 import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity, eligibleProfile, matchesCastingRequirements, isExplicitAdultCasting,matchesWantedProfileRoles,incompleteProfileFields} from "./engine.ts";
 const db=new SQL(Bun.env.DATABASE_URL||"postgres://unconfigured");
@@ -1023,9 +1023,13 @@ if(a==="addphoto"){
     "У вас уже 10 активных заявок — это максимум. Остановите поиск по одной из них или обратитесь в поддержку.",
     buttons([[["📌 Мои заявки","mine"],["💬 Поддержка","support"]]]));
   if(outcome.status==="invalid")return send(id,"Не удалось подтвердить заявку. Проверьте заполненные поля.");
-  if(outcome.status==="duplicate")return send(id,outcome.jobId?
+  if(outcome.status==="duplicate"){
+   const filters={...(u.filters||{})};delete filters.draft;delete filters.draftToken;
+   await change(id,{state:"",filters});
+   return send(id,outcome.jobId?
     "Заявка №"+outcome.jobId+" уже опубликована. Вторую копию не создаём.":
     "Заявка уже обрабатывается. Проверьте «Мои заявки».",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
+  }
   const filters={...(u.filters||{})};delete filters.draft;delete filters.draftToken;
   await change(id,{state:"",filters});
   return send(id,"✅ Заявка №"+outcome.jobId+" опубликована. Подбор поставлен в очередь.");
@@ -1098,7 +1102,11 @@ if(a.startsWith("updatejob:")){
 if(a.startsWith("jobpause:")){
   const action=parseJobVisibilityAction(a);
   if(!action)return send(id,"Эта кнопка изменения заявки устарела. Откройте список и выберите действие заново.",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
-  const outcome=await setJobVisibility(sql,id,action);
+  const outcome=await changeJobVisibilityWithQuota(db,id,action,hasPaidAccess(u));
+  if(outcome.status==="limit")return send(id,outcome.maxActive===1?
+   "Без подписки доступна одна активная заявка. Остановите поиск по другой заявке, чтобы возобновить эту.":
+   "Достигнут лимит активных заявок. Остановите одну из заявок или обратитесь в поддержку.",
+   buttons([[["📌 Мои заявки","mine"],["💬 Поддержка","support"]]]));
   if(outcome.status==="invalid"||outcome.status==="missing")return send(id,"Заявка не найдена или уже закрыта.",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
   if(outcome.status==="conflict")return send(id,"Заявка уже изменила состояние. Откройте свежий список.",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
   return send(id,outcome.status==="already"?
