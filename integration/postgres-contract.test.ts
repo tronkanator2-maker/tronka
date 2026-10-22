@@ -6,7 +6,7 @@ import {acceptResponseForOwner,prepareAcceptedResponseOutbox} from "../response-
 import {acceptInvitationForRecipient,prepareAcceptedInvitationOutbox} from "../invite-acceptance.ts";
 import {relayAuthorized} from "../relay.ts";
 import {prepareDecisionNotifications,updateCollaborationDecision,deliverDecisionNotifications} from "../decision-notifications.ts";
-import {createResponseWithQuota,createInvitationWithQuota,publishJobWithQuota} from "../quota-actions.ts";
+import {createResponseWithQuota,createInvitationWithQuota,publishJobWithQuota,changeJobVisibilityWithQuota} from "../quota-actions.ts";
 import {prepareInvitationOutbox} from "../invitation-delivery.ts";
 
 // This suite runs ONLY against the disposable PostgreSQL 16 service in CI.
@@ -144,6 +144,16 @@ test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay"
   expect(newPublished.status).toBe("created");
   expect((await sql("SELECT COUNT(*)::int n FROM mm_jobs WHERE id=$1 AND paused=FALSE",newPublished.jobId))[0].n).toBe(1);
   expect((await sql("SELECT COUNT(*)::int n FROM mm_fanout_queue WHERE job_id IN ($1,$2)",activePublished.jobId,newPublished.jobId))[0].n).toBe(2);
+  // Pausing a free job frees a slot, but a stale Resume action cannot turn
+  // both listings active. Paid users may resume up to the configured cap.
+  const refusedResume=await changeJobVisibilityWithQuota(client,freeOwner,{id:Number(activePublished.jobId),paused:false},false);
+  expect(refusedResume).toEqual({status:"limit",maxActive:1,paused:true});
+  expect((await sql("SELECT paused FROM mm_jobs WHERE id=$1",activePublished.jobId))[0].paused).toBe(true);
+  const paidResume=await changeJobVisibilityWithQuota(client,freeOwner,{id:Number(activePublished.jobId),paused:false},true);
+  expect(paidResume.status).toBe("changed");
+  expect((await changeJobVisibilityWithQuota(client,freeOwner,{id:Number(activePublished.jobId),paused:false},true)).status).toBe("already");
+  expect((await sql("SELECT paused FROM mm_jobs WHERE id=$1",activePublished.jobId))[0].paused).toBe(false);
+
 
   // Insufficient access must not reserve a quota or emit a notification.
   await sql("UPDATE mm_users SET blocked=TRUE WHERE id=1202");
