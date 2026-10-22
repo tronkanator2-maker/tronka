@@ -4,6 +4,7 @@ import {test,expect} from "bun:test";
 // This catches accidental removal of a handler while changing the main menu.
 const source=await Bun.file(new URL("../bot.ts",import.meta.url)).text();
 const dispatcherSource=await Bun.file(new URL("../telegram-dispatch.ts",import.meta.url)).text();
+const quotasSource=await Bun.file(new URL("../quota-actions.ts",import.meta.url)).text();
 const menuSource=source.slice(source.indexOf("const menu="),source.indexOf("const esc="));
 const actions=Object.fromEntries([
  ["profile",'if(a==="profile")'],
@@ -87,8 +88,10 @@ test("the create-job menu still opens both real creation flows and publishing pr
  expect(callback).toContain('if(a==="job_template")');
  expect(callback).toContain('if(a==="jobwizard:start")');
  expect(callback).toContain('if(a==="publish")');
- expect(callback).toContain("ON CONFLICT DO NOTHING RETURNING *");
- expect(callback).toContain('already.id+" уже опубликована. Вторую копию не создаём."');
+ expect(callback).toContain("publishJobWithQuota(db,");
+ expect(quotasSource).toContain("ON CONFLICT DO NOTHING RETURNING *");
+ expect(quotasSource).toContain("INSERT INTO mm_fanout_queue(job_id)");
+ expect(callback).toContain('"Заявка №"+outcome.jobId+" уже опубликована. Вторую копию не создаём."');
 });
 
 test("Home action is handled before consent gating and clears stale text-input modes",()=>{
@@ -131,8 +134,9 @@ test("invitation issue serializes double-clicks and queues delivery instead of s
  const issue=cb.slice(cb.indexOf('if(a.startsWith("invite:"))'),cb.indexOf('if(a.startsWith("rejectinvite:"))'));
  expect(source).toContain("const inviteCreationQueue=createConsentEditQueue()");
  expect(issue).toContain("inviteCreationQueue(id,async()=>");
- expect(issue).toContain("queueInitialInvitation(sql,invited.id)");
- expect(issue).toContain("queueInitialInvitation(sql,duplicate.id)");
+ expect(issue).toContain("createInvitationWithQuota(db,");
+ expect(quotasSource).toContain("INSERT INTO mm_invitation_outbox(invitation_id)");
+ expect(quotasSource).toContain("ON CONFLICT(invitation_id) DO NOTHING");
  expect(issue).not.toContain("await profile(p.id,u");
 });
 test("accepted invitation and accepted response actions are recovered by durable retry queues",()=>{
@@ -272,4 +276,20 @@ test("PostgreSQL BIGINT string owners cannot be mistaken for a registered person
  expect(source).not.toContain("j.owner===0");
  expect(source).not.toContain("j.owner!==0");
  expect(source).not.toContain("job.owner===0");
+});
+
+test("free owner job slot and weekly response/invite quotas commit with outbox in one transaction",()=>{
+ expect(source).toContain("createResponseWithQuota(db,");
+ expect(source).toContain("createInvitationWithQuota(db,");
+ expect(source).toContain("publishJobWithQuota(db,");
+ expect(quotasSource).toContain("db.begin(async tx=>");
+ expect(quotasSource).toContain("pg_advisory_xact_lock");
+ expect(quotasSource).toContain("const limit=paid?maxActive:1");
+ expect(quotasSource).toContain("created_at>=$2");
+ expect(quotasSource).toContain("INSERT INTO mm_response_outbox(response_id)");
+ expect(quotasSource).toContain("INSERT INTO mm_invitation_outbox(invitation_id)");
+ expect(quotasSource).toContain("INSERT INTO mm_fanout_queue(job_id)");
+ const reply=source.slice(source.indexOf("async function submitResponse("),source.indexOf("async function onMessage("));
+ expect(reply).not.toContain('SELECT COUNT(*)::int n FROM mm_responses');
+ expect(source).not.toContain('Без подписки можно разместить одну новую заявку с понедельника по воскресенье.');
 });
