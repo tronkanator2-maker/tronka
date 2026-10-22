@@ -27,11 +27,17 @@ export async function acceptInvitationForRecipient(sql,inviteId,recipientId){
   WHERE i.id=$1 AND i.to_user=$2 AND i.status='sent'
    AND EXISTS(SELECT 1 FROM mm_users s
      WHERE s.id=i.from_user AND s.blocked=FALSE AND s.suspended=FALSE)
+   AND EXISTS(SELECT 1 FROM mm_users recipient
+     WHERE recipient.id=i.to_user AND recipient.blocked=FALSE AND recipient.suspended=FALSE)
   RETURNING i.id,i.from_user,i.to_user`,invitation,actor);
  // If the original callback crashed after commit, requeue instead of
  // replying "already processed" while leaving one participant uninformed.
  const row=updated[0]||(await sql(`SELECT i.id,i.from_user,i.to_user
-  FROM mm_invitations i WHERE i.id=$1 AND i.to_user=$2 AND i.status='accepted'`,invitation,actor))[0];
+  FROM mm_invitations i WHERE i.id=$1 AND i.to_user=$2 AND i.status='accepted'
+  AND EXISTS(SELECT 1 FROM mm_users sender
+    WHERE sender.id=i.from_user AND sender.blocked=FALSE AND sender.suspended=FALSE)
+  AND EXISTS(SELECT 1 FROM mm_users recipient
+    WHERE recipient.id=i.to_user AND recipient.blocked=FALSE AND recipient.suspended=FALSE)`,invitation,actor))[0];
  if(!row)return null;
  await sql("INSERT INTO mm_accepted_invitation_outbox(invitation_id) VALUES($1) ON CONFLICT(invitation_id) DO NOTHING",row.id);
  return {id:row.id,fromUser:row.from_user,toUser:row.to_user,newlyAccepted:updated.length>0};
