@@ -216,7 +216,7 @@ async function profile(to,u,heading="Анкета",backToCatalog=null,delivery=n
  return send(to,content,buttons(rows));
 }
 async function card(to,j,backToJobs=null){
- const p=j.body||{},external=j.owner===0;
+ const p=j.body||{},external=Number(j.owner)===0;
  const visible=k=>esc(external?sourceJobDisplayText(get(p,k)):redactContacts(get(p,k)));
  const lines=[
  "<b>📢 "+visible("название заявки")+"</b>",
@@ -315,7 +315,7 @@ async function runFanoutBatch(){
 }
 
 async function sendMatchedProfile(job,p){
- if(job.owner===p.id||job.owner===0||job.paused||job.status!=="active")return false;
+ if(String(job.owner)===String(p.id)||Number(job.owner)===0||job.paused||job.status!=="active")return false;
  if(!p.active||p.blocked||p.suspended||!allConsentsCurrent(p.consent,await currentDocumentHashes())||!eligibleProfile(p.profile,p.photo))return false;
  if(!roleMatch(get(job.body,"кого ищу"),get(p.profile,"кто вы")))return false;
  const owner=(await sql("SELECT filters,consent FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE",job.owner))[0];
@@ -586,10 +586,10 @@ async function submitResponse(u,body){
  if(!message||message.length>1200)return send(id,"Напишите текст отклика длиной от 1 до 1200 символов. Для отмены — /cancel.");
  if(!eligibleProfile(u.profile,u.photo))return send(id,"Перед откликом заполните анкету и добавьте главное фото.");
  const j=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",jobId))[0];
- if(!j||j.owner===id)return send(id,"Заявка недоступна для отклика.");
+ if(!j||String(j.owner)===String(id))return send(id,"Заявка недоступна для отклика.");
  const existing=await sql("SELECT id FROM mm_responses WHERE job_id=$1 AND user_id=$2",jobId,id);
  if(existing.length){
-  if(j.owner!==0)await sql("INSERT INTO mm_response_outbox(response_id) VALUES($1) ON CONFLICT DO NOTHING",existing[0].id);
+  if(Number(j.owner)!==0)await sql("INSERT INTO mm_response_outbox(response_id) VALUES($1) ON CONFLICT DO NOTHING",existing[0].id);
   return send(id,"Отклик уже сохранён. Если уведомление ещё не было доставлено заказчику, бот повторит отправку.");
  }
  const quota=await sql("SELECT COUNT(*)::int n FROM mm_responses WHERE user_id=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());
@@ -598,7 +598,7 @@ async function submitResponse(u,body){
  if(!inserted.length)return send(id,"Отклик уже отправлен.");
  const f={...(u.filters||{})};delete f.replyJobId;
  await change(id,{state:"",filters:f});
- const owner=j.owner===0?null:(await sql("SELECT * FROM mm_users WHERE id=$1",j.owner))[0];
+ const owner=Number(j.owner)===0?null:(await sql("SELECT * FROM mm_users WHERE id=$1",j.owner))[0];
  if(owner){
   await sql("INSERT INTO mm_response_outbox(response_id) VALUES($1) ON CONFLICT DO NOTHING",inserted[0].id);
  }
@@ -1164,7 +1164,7 @@ if(a==="editfilters"){await change(id,{state:"filter"});return send(id,"Отпр
  if(!job)return send(id,"Поиск по заявке остановлен или заявка устарела.");
  if(!eligibleProfile(u.profile,u.photo))return send(id,"Для отклика заполните обязательные поля анкеты и добавьте главное фото.");
  if(!u.first_reply_ack_at)return send(id,"🛡 <b>Перед первым откликом</b>\n«Мир моделей» помогает найти исполнителей и съёмки, но не организует сделки, не проверяет условия и не участвует в расчётах. Сервис не гарантирует достоверность сведений об участниках: решение встретиться, передать деньги или материалы принимаете вы.\n\nПеред съёмкой уточните условия, не отправляйте незнакомым предоплату и прочитайте памятку о безопасности. О подозрительных предложениях сообщайте в поддержку.",buttons([[["✅ Понятно, продолжить","replyack:"+jobId]],[["📚 Памятка","articles"],["❌ Отмена","home"]]]));
- if(job.owner===id)return send(id,"Нельзя откликнуться на собственную заявку.");
+ if(String(job.owner)===String(id))return send(id,"Нельзя откликнуться на собственную заявку.");
  const duplicate=await sql("SELECT id FROM mm_responses WHERE job_id=$1 AND user_id=$2",jobId,id);
  if(duplicate.length)return send(id,"Вы уже откликались на эту заявку.");
  const n=await sql("SELECT COUNT(*)::int n FROM mm_responses WHERE user_id=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());
