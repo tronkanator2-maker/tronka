@@ -269,10 +269,10 @@ test("main menu and filters expose idempotent search controls; legacy pause requ
 
 test("PostgreSQL BIGINT string owners cannot be mistaken for a registered person",()=>{
  expect(source).toContain("external=Number(j.owner)===0");
- expect(source).toContain("Number(j.owner)!==0");
- expect(source).toContain("const owner=Number(j.owner)===0?null:");
+ expect(quotasSource).toContain("Number(listing.owner)!==0");
+ expect(quotasSource).toContain("isIdEqual(listing.owner,actor)");
  expect(source).toContain("String(job.owner)===String(p.id)");
- expect(source).toContain("String(job.owner)===String(id)");
+ expect(quotasSource).toContain("isIdEqual(listing.owner,actor)");
  expect(source).not.toContain("j.owner===0");
  expect(source).not.toContain("j.owner!==0");
  expect(source).not.toContain("job.owner===0");
