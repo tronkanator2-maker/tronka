@@ -253,7 +253,7 @@ test("job management explicitly sets visibility and never toggles the same job t
  const route=callback.slice(start,end);
  expect(source).toContain("jobVisibilityCallback(j)");
  expect(route).toContain("parseJobVisibilityAction(a)");
- expect(route).toContain("setJobVisibility(sql,id,action)");
+ expect(route).toContain("changeJobVisibilityWithQuota(db,id,action,hasPaidAccess(u))");
  expect(route).not.toContain("paused=NOT paused");
  expect(route).not.toContain("await dispatch(rows[0])");
 });
@@ -285,6 +285,7 @@ test("free owner job slot and weekly response/invite quotas commit with outbox i
  expect(quotasSource).toContain("db.begin(async tx=>");
  expect(quotasSource).toContain("pg_advisory_xact_lock");
  expect(quotasSource).toContain("const limit=paid?maxActive:1");
+ expect(quotasSource).toContain("export async function changeJobVisibilityWithQuota");
  expect(quotasSource).toContain("created_at>=$2");
  expect(quotasSource).toContain("INSERT INTO mm_response_outbox(response_id)");
  expect(quotasSource).toContain("INSERT INTO mm_invitation_outbox(invitation_id)");
