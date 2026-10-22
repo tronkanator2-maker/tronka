@@ -5,6 +5,7 @@ import {setSearchActive} from "../search-state.ts";
 import {acceptResponseForOwner,prepareAcceptedResponseOutbox} from "../response-acceptance.ts";
 import {acceptInvitationForRecipient,prepareAcceptedInvitationOutbox} from "../invite-acceptance.ts";
 import {relayAuthorized} from "../relay.ts";
+import {prepareDecisionNotifications,updateCollaborationDecision,deliverDecisionNotifications} from "../decision-notifications.ts";
 
 // This suite runs ONLY against the disposable PostgreSQL 16 service in CI.
 // It must never use DATABASE_URL or connect to Railway/production.
@@ -23,11 +24,12 @@ test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay"
   await sql("CREATE TABLE mm_invitations(id BIGINT PRIMARY KEY,from_user BIGINT NOT NULL REFERENCES mm_users(id),to_user BIGINT NOT NULL REFERENCES mm_users(id),status TEXT NOT NULL DEFAULT 'sent')");
   await prepareAcceptedResponseOutbox(sql);
   await prepareAcceptedInvitationOutbox(sql);
+  await prepareDecisionNotifications(sql);
 
   await sql("INSERT INTO mm_users(id) VALUES(101),(102),(103)");
   await sql("INSERT INTO mm_jobs(id,owner) VALUES(201,101)");
   await sql("INSERT INTO mm_responses(id,job_id,user_id) VALUES(501,201,102),(502,201,102),(503,201,102)");
-  await sql("INSERT INTO mm_invitations(id,from_user,to_user) VALUES(601,101,103),(602,101,102)");
+  await sql("INSERT INTO mm_invitations(id,from_user,to_user) VALUES(601,101,103),(602,101,102),(603,101,103),(604,101,103)");
 
   expect((await setJobVisibility(sql,101,{id:201,paused:true})).status).toBe("changed");
   expect((await setJobVisibility(sql,101,{id:201,paused:true})).status).toBe("already");
@@ -64,6 +66,32 @@ test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay"
   expect(invitation.newlyAccepted).toBe(true);
   expect((await sql("SELECT status FROM mm_invitations WHERE id=601"))[0].status).toBe("accepted");
   expect(await relayAuthorized(sql,101,103)).toBe(true);
+
+  // Decisions and their notifications use the same production SQL as the
+  // Telegram callbacks, not mocks. They must enforce ownership and preserve
+  // the opposite participant's private contact details.
+  expect(await updateCollaborationDecision(sql,"response_declined",503,103)).toBeNull();
+  const declined=await updateCollaborationDecision(sql,"response_declined",503,101);
+  expect(declined.newlyChanged).toBe(true);
+  expect(String(declined.recipientId)).toBe("102");
+  expect((await sql("SELECT status FROM mm_responses WHERE id=503"))[0].status).toBe("declined");
+
+  const cancelled=await updateCollaborationDecision(sql,"invitation_cancelled",603,101);
+  expect(cancelled.newlyChanged).toBe(true);
+  const rejected=await updateCollaborationDecision(sql,"invitation_declined",604,103);
+  expect(rejected.newlyChanged).toBe(true);
+  expect(await updateCollaborationDecision(sql,"invitation_cancelled",601,101)).toBeNull();
+  expect((await sql("SELECT COUNT(*)::int AS n FROM mm_decision_notifications"))[0].n).toBe(3);
+
+  const statusNotices=[];
+  const notices=await deliverDecisionNotifications(sql,async(id,body)=>{
+   statusNotices.push({recipient:String(id),body});
+   return {ok:true};
+  });
+  expect(notices).toEqual({processed:3,completed:3,failed:0});
+  expect(statusNotices).toHaveLength(3);
+  expect(statusNotices.find(x=>x.body.includes("отклонён")).recipient).toBeDefined();
+  expect((await sql("SELECT COUNT(*)::int AS n FROM mm_decision_notifications WHERE completed_at IS NULL"))[0].n).toBe(0);
 
   await sql("UPDATE mm_users SET blocked=TRUE WHERE id=102");
   expect(await relayAuthorized(sql,101,102)).toBe(false);
