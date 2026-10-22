@@ -239,3 +239,26 @@ test("Telegram user loading no longer adds database round trips for every tapped
  expect(source).toContain("async function who(from){return loadTelegramUser(sql,from)}");
  expect(source).toContain('import {loadTelegramUser} from "./telegram-user.ts"');
 });
+
+test("job management explicitly sets visibility and never toggles the same job twice",()=>{
+ const callback=source.slice(source.indexOf("async function onCallback(c){"));
+ const start=callback.indexOf('if(a.startsWith("jobpause:")){');
+ const end=callback.indexOf('if(a.startsWith("close:")){',start);
+ expect(start).toBeGreaterThan(-1);
+ expect(end).toBeGreaterThan(start);
+ const route=callback.slice(start,end);
+ expect(source).toContain("jobVisibilityCallback(j)");
+ expect(route).toContain("parseJobVisibilityAction(a)");
+ expect(route).toContain("setJobVisibility(sql,id,action)");
+ expect(route).not.toContain("paused=NOT paused");
+ expect(route).not.toContain("await dispatch(rows[0])");
+});
+test("main menu and filters expose idempotent search controls; legacy pause requires explicit choice",()=>{
+ expect(source).toContain("searchMenuFor(menu,u).inline_keyboard");
+ expect(source).toContain('send(u.id,"<b>✨ Мир моделей</b>\\nВыберите раздел.",searchMenuFor(menu,u))');
+ expect(source).toContain("searchAction(u)");
+ expect(source).toContain('if(a==="pause"){');
+ expect(source).toContain('if(a==="search:stop"||a==="search:resume"){');
+ expect(source).toContain("setSearchActive(sql,id,desired)");
+ expect(source).not.toContain("active:!u.active");
+});
