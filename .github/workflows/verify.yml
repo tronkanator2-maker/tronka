@@ -10,6 +10,20 @@ jobs:
   tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci_user
+          POSTGRES_PASSWORD: ci_password_only
+          POSTGRES_DB: world_models_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_user -d world_models_ci"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,7 +34,11 @@ jobs:
       - name: Compile Telegram server
         run: bun build --target=bun bot.ts --outdir /tmp/world-models-check
       - name: Test domain and privacy modules
-        run: bun test
+        run: bun test tests
+      - name: Test real PostgreSQL contracts
+        env:
+          PGTEST_DATABASE_URL: postgres://ci_user:ci_password_only@127.0.0.1:5432/world_models_ci
+        run: bun test integration
       - name: Verify no known secrets in source
         shell: bash
         run: |
