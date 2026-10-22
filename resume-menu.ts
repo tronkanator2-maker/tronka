@@ -16,6 +16,16 @@ export function resumeMenu(user){
     {text:"📌 Мои заявки",callback_data:"mine"}]
   ]);
  }
+ // /start closes free-text editing but leaves draftJobId in filters.
+ // Offer the previously edited job before an unrelated saved profile draft.
+ if(!state&&Number.isSafeInteger(editId)&&editId>0)return result("Вы не закончили редактировать заявку.",[
+  [{text:"✏️ Продолжить заявку №"+editId,callback_data:"jobedit:"+editId},
+   {text:"📌 Мои заявки",callback_data:"mine"}]
+ ]);
+ if(!state&&f.draft&&typeof f.draft==="object"&&Object.keys(f.draft).length)return result("Есть сохранённый черновик заявки.",[
+  [{text:"📝 Открыть шаблон заявки",callback_data:"job_template"},
+   {text:"📌 Мои заявки",callback_data:"mine"}]
+ ]);
  if(state==="wizard")return result("У вас есть незавершённая анкета.",[
   [{text:"▶️ Продолжить анкету",callback_data:"wizard:resume"},{text:"❌ Отменить",callback_data:"wizard:cancel"}]
  ]);
