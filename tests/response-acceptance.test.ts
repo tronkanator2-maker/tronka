@@ -52,7 +52,7 @@ test("worker checks PostgreSQL queue flags and marks each delivered recipient se
    response_id:17,owner:55,user_id:99,response_status:"accepted",
    owner_notified:false,applicant_notified:false
   }];
-  if(query.includes("SELECT id,username FROM mm_users"))return [{id:55,username:"studio_owner"},{id:99,username:"model_anna"}];
+  if(query.includes("SELECT id,username,blocked,suspended FROM mm_users"))return [{id:55,username:"studio_owner"},{id:99,username:"model_anna"}];
   return [];
  };
  const deliver=async(id,text,keyboard)=>{sent.push({id,text,keyboard});return {ok:true}};
@@ -75,7 +75,7 @@ test("partial Telegram failure retries only the missing person instead of repeat
    response_id:17,owner:55,user_id:99,response_status:"accepted",
    owner_notified:phase===1,applicant_notified:false
   }];
-  if(query.includes("SELECT id,username"))return [{id:55,username:"valid_user"},{id:99,username:"valid_model"}];
+  if(query.includes("SELECT id,username,blocked,suspended"))return [{id:55,username:"valid_user"},{id:99,username:"valid_model"}];
   return [];
  };
  const deliver=async(id)=>{
@@ -100,4 +100,63 @@ test("outbox setup enforces durable state and retry scheduling",async()=>{
  expect(queries[0]).toContain("mm_accepted_response_outbox");
  expect(queries[0]).toContain("ON DELETE CASCADE");
  expect(queries[1]).toContain("WHERE completed_at IS NULL");
+});
+
+test("a response cannot be accepted against closed/paused/expired jobs or restricted participants",async()=>{
+ const calls=[];
+ const sql=async (query,...args)=>{
+  calls.push({query,args});
+  return [];
+ };
+ expect(await acceptResponseForOwner(sql,99,10)).toBeNull();
+ expect(calls).toHaveLength(2);
+ const update=calls[0].query;
+ expect(update).toContain("j.status='active'");
+ expect(update).toContain("j.paused=FALSE");
+ expect(update).toContain("j.expires_at>NOW()");
+ expect(update).toContain("owner.blocked=FALSE");
+ expect(update).toContain("owner.suspended=FALSE");
+ expect(update).toContain("applicant.blocked=FALSE");
+ expect(update).toContain("applicant.suspended=FALSE");
+ const retry=calls[1].query;
+ expect(retry).toContain("r.status='accepted'");
+ expect(retry).toContain("owner.blocked=FALSE");
+ expect(retry).toContain("applicant.suspended=FALSE");
+});
+
+test("blocked accepted-response participants never receive a direct Telegram handle or relay link",async()=>{
+ for(const blocked of ["owner","applicant"]){
+  const sent=[];
+  const queries=[];
+  const sql=async(query,...args)=>{
+   queries.push(query);
+   if(query.includes("FROM mm_accepted_response_outbox o"))return [{
+    response_id:32,owner:101,user_id:102,response_status:"accepted",
+    owner_notified:false,applicant_notified:false
+   }];
+   if(query.includes("SELECT id,username,blocked,suspended FROM mm_users")){
+    return [{id:101,username:"owner_101",blocked:blocked==="owner",suspended:false},
+            {id:102,username:"model_102",blocked:blocked==="applicant",suspended:false}];
+   }
+   return [];
+  };
+  const result=await deliverAcceptedResponses(sql,async(...args)=>{sent.push(args);return {ok:true}});
+  expect(result).toEqual({processed:1,completed:1,failed:0});
+  expect(sent).toHaveLength(0);
+  expect(queries.some(q=>q.includes("completed_at=NOW()"))).toBe(true);
+ }
+});
+
+test("suspended accepted-response participants also cannot receive contacts",async()=>{
+ const sent=[];
+ const sql=async query=>{
+  if(query.includes("FROM mm_accepted_response_outbox o"))return [{response_id:12,owner:101,user_id:102,response_status:"accepted",owner_notified:false,applicant_notified:false}];
+  if(query.includes("SELECT id,username,blocked,suspended FROM mm_users"))return [
+   {id:101,username:"owner_101",blocked:false,suspended:false},
+   {id:102,username:"model_102",blocked:false,suspended:true}];
+  return [];
+ };
+ const outcome=await deliverAcceptedResponses(sql,async(...args)=>{sent.push(args);return {ok:true}});
+ expect(outcome.completed).toBe(1);
+ expect(sent).toHaveLength(0);
 });
