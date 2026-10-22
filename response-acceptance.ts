@@ -23,12 +23,22 @@ export async function acceptResponseForOwner(sql,responseId,ownerId){
  if(!id||!owner)return null;
  const changed=await sql(`UPDATE mm_responses r SET status='accepted',accepted_at=NOW()
   FROM mm_jobs j WHERE r.id=$1 AND r.job_id=j.id AND j.owner=$2
-  AND r.status='pending' RETURNING r.id,r.job_id,r.user_id`,id,owner);
+  AND j.status='active' AND j.paused=FALSE AND j.expires_at>NOW()
+  AND r.status='pending'
+  AND EXISTS(SELECT 1 FROM mm_users owner WHERE owner.id=j.owner
+    AND owner.blocked=FALSE AND owner.suspended=FALSE)
+  AND EXISTS(SELECT 1 FROM mm_users applicant WHERE applicant.id=r.user_id
+    AND applicant.blocked=FALSE AND applicant.suspended=FALSE)
+  RETURNING r.id,r.job_id,r.user_id`,id,owner);
  // An HTTP failure after the status change but before enqueue must be
  // recoverable by tapping the SAME callback a second time.
  const response=changed[0]||(await sql(`SELECT r.id,r.job_id,r.user_id FROM mm_responses r
   JOIN mm_jobs j ON r.job_id=j.id WHERE r.id=$1 AND j.owner=$2
-  AND r.status='accepted'`,id,owner))[0];
+  AND r.status='accepted'
+  AND EXISTS(SELECT 1 FROM mm_users owner WHERE owner.id=j.owner
+    AND owner.blocked=FALSE AND owner.suspended=FALSE)
+  AND EXISTS(SELECT 1 FROM mm_users applicant WHERE applicant.id=r.user_id
+    AND applicant.blocked=FALSE AND applicant.suspended=FALSE)`,id,owner))[0];
  if(!response)return null;
  await sql("INSERT INTO mm_accepted_response_outbox(response_id) VALUES($1) ON CONFLICT(response_id) DO NOTHING",response.id);
  return {id:response.id,jobId:response.job_id,userId:response.user_id,newlyAccepted:changed.length>0};
@@ -55,10 +65,10 @@ export async function deliverAcceptedResponses(sql,send,limit=5){
     completed++;
     continue;
    }
-   const people=await sql("SELECT id,username FROM mm_users WHERE id IN ($1,$2)",item.owner,item.user_id);
+   const people=await sql("SELECT id,username,blocked,suspended FROM mm_users WHERE id IN ($1,$2)",item.owner,item.user_id);
    const owner=people.find(p=>String(p.id)===String(item.owner));
    const applicant=people.find(p=>String(p.id)===String(item.user_id));
-   if(!owner||!applicant){
+   if(!owner||!applicant||owner.blocked||owner.suspended||applicant.blocked||applicant.suspended){
     await sql("UPDATE mm_accepted_response_outbox SET completed_at=NOW() WHERE response_id=$1",item.response_id);
     completed++;
     continue;
