@@ -224,3 +224,18 @@ test("registration preview explains why real profile and job flows are blocked",
  expect(preview).toContain("Для проверки всех сценариев включите тестовый режим");
  expect(preview).toContain('"📄 Документы сервиса","docs"');
 });
+
+test("matched-profile delivery persists successful heading/media and does not repeat them after card text failure",()=>{
+ const server=source.slice(source.indexOf("async function profile(to,u"),source.indexOf("async function card(to,j"));
+ const matches=source.slice(source.indexOf("async function sendMatchedProfile(job,p)"),source.indexOf("async function profileBackfill(p)"));
+ expect(source).toContain("await prepareProfileDeliveryProgress(sql)");
+ expect(server).toContain("if(!delivery?.skipMedia)");
+ expect(server).toContain("if(delivery?.onMediaSent)await delivery.onMediaSent()");
+ expect(matches).toContain("deliverMatchedProfileProgress(sql,job.id,p.id");
+ expect(matches).toContain('delivery=>profile(job.owner,p,"Анкета подходящего участника",null,delivery)');
+ expect(matches).not.toContain("DELETE FROM mm_profile_deliveries");
+});
+test("Telegram user loading no longer adds database round trips for every tapped button",()=>{
+ expect(source).toContain("async function who(from){return loadTelegramUser(sql,from)}");
+ expect(source).toContain('import {loadTelegramUser} from "./telegram-user.ts"');
+});
