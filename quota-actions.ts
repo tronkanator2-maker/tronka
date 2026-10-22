@@ -1,3 +1,4 @@
+import {setJobVisibility} from "./job-visibility.ts";
 // Critical user actions share a PostgreSQL transaction and a per-user lock.
 // SELECT COUNT followed by INSERT outside a transaction permits simultaneous
 // callbacks to exceed quotas. All three flows are atomic and retry-safe.
@@ -101,5 +102,23 @@ export async function publishJobWithQuota(db,{ownerId,body,expiresAt,draftToken,
    generation=mm_fanout_queue.generation+1,profiles_done=FALSE,attempts=0,
    completed_at=NULL,next_attempt_at=NOW()`,listing.id);
   return {status:"created",jobId:listing.id,listing};
+ });
+}
+
+export async function changeJobVisibilityWithQuota(db,ownerId,action,paid=false,maxActive=10){
+ const owner=positiveId(ownerId),job=positiveId(action?.id);
+ if(!owner||!job||typeof action?.paused!=="boolean"||
+    !Number.isSafeInteger(maxActive)||maxActive<1||maxActive>1000)return {status:"invalid"};
+ return withUserActionLock(db,owner,async sql=>{
+  if(!action.paused){
+   const records=await sql("SELECT id,paused,expires_at FROM mm_jobs WHERE id=$1 AND owner=$2 AND status='active' FOR UPDATE",job,owner);
+   const existing=records[0];
+   if(!existing||new Date(existing.expires_at)<=new Date())return {status:"missing"};
+   if(!existing.paused)return {status:"already",paused:false};
+   const rows=await sql("SELECT COUNT(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",owner);
+   const limit=paid?maxActive:1;
+   if(Number(rows[0]?.total||0)>=limit)return {status:"limit",maxActive:limit,paused:true};
+  }
+  return setJobVisibility(sql,owner,action);
  });
 }
