@@ -1,6 +1,7 @@
 import {SQL} from "bun";
 import {decodeDbRows} from "./db-json.ts";
 import {loadTelegramUser} from "./telegram-user.ts";
+import {jobVisibilityCallback,parseJobVisibilityAction,setJobVisibility} from "./job-visibility.ts";
 import {parseStartTarget,parseOnboardTarget,parseReferralStart,parseReferralOnboard} from "./deep-links.ts";
 import {leavingToHome} from "./navigation-state.ts";
 import {resumeMenu} from "./resume-menu.ts";
@@ -1061,7 +1062,7 @@ if(a==="addphoto"){
   const page=items.slice(0,5);
   if(!page.length)return send(id,offset?"Других заявок пока нет.":"У вас пока нет заявок.",buttons([[["➕ Создать заявку","new"],["🏠 В меню","home"]]]));
   const lines=page.map(j=>"№"+j.id+" · "+esc(get(j.body,"название заявки"))+" — "+(j.status!=="active"?esc(j.status):j.paused?"поиск остановлен":"активна"));
-  const controls=page.filter(j=>j.status==="active").map(j=>[[j.paused?"▶️ Возобновить №"+j.id:"⏸ Остановить №"+j.id,"jobpause:"+j.id],["✏️ Изменить №"+j.id,"jobedit:"+j.id],["✅ Закрыть №"+j.id,"close:"+j.id]]);
+  const controls=page.filter(j=>j.status==="active").map(j=>[[j.paused?"▶️ Возобновить №"+j.id:"⏸ Остановить №"+j.id,jobVisibilityCallback(j)],["✏️ Изменить №"+j.id,"jobedit:"+j.id],["✅ Закрыть №"+j.id,"close:"+j.id]]);
   const nav=pageNavigation("mine",offset,items.length>5);
   if(nav.length)controls.push(nav);
   controls.push([["➕ Создать заявку","new"],["🏠 В меню","home"]]);
@@ -1090,9 +1091,18 @@ if(a.startsWith("updatejob:")){
  }
  return send(id,"✅ Заявка №"+jobId+" обновлена. Новая версия доступна в поиске.");
 }
-if(a.startsWith("jobpause:")){const rows=await sql("UPDATE mm_jobs SET paused=NOT paused WHERE id=$1 AND owner=$2 AND status='active' RETURNING *",Number(a.slice(9)),id);
- if(rows.length&&!rows[0].paused)await dispatch(rows[0]);
- return send(id,rows.length?(rows[0].paused?"Поиск анкет по этой заявке остановлен.":"Поиск анкет по этой заявке возобновлён."):"Заявка недоступна.")}if(a.startsWith("close:")){
+if(a.startsWith("jobpause:")){
+  const action=parseJobVisibilityAction(a);
+  if(!action)return send(id,"Эта кнопка изменения заявки устарела. Откройте список и выберите действие заново.",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
+  const outcome=await setJobVisibility(sql,id,action);
+  if(outcome.status==="invalid"||outcome.status==="missing")return send(id,"Заявка не найдена или уже закрыта.",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
+  if(outcome.status==="conflict")return send(id,"Заявка уже изменила состояние. Откройте свежий список.",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
+  return send(id,outcome.status==="already"?
+    (outcome.paused?"Поиск по заявке уже остановлен.":"Поиск по заявке уже возобновлён."):
+    (outcome.paused?"✅ Поиск по заявке остановлен.":"✅ Поиск по заявке возобновлён, подбор поставлен в очередь."),
+    buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
+ }
+ if(a.startsWith("close:")){
  const jobId=Number(a.slice(6));
  if(!Number.isSafeInteger(jobId)||jobId<=0)return send(id,"Некорректная заявка.");
  const closed=await sql("UPDATE mm_jobs SET status='closed' WHERE id=$1 AND owner=$2 AND status='active' RETURNING id",jobId,id);
