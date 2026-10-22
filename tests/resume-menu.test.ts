@@ -43,3 +43,20 @@ test("idle user has no unnecessary resume buttons; no user data changes",()=>{
  expect(result).toEqual({label:"",rows:[]});
  expect(JSON.stringify(u)).toBe(before);
 });
+
+test("after Home, job edit draft takes priority over stale profile draft",()=>{
+ const r=activeAction({state:"",filters:{draftJobId:85,profileDraft:{"имя":"Анна"}}});
+ expect(r.label).toContain("заявку");
+ expect(r.callbacks).toEqual(["jobedit:85","mine"]);
+});
+test("after Home, saved job template stays accessible before older profile draft",()=>{
+ const r=activeAction({state:"",filters:{draft:{"город":"Москва"},profileDraft:{"имя":"Анна"}}});
+ expect(r.label).toContain("заявки");
+ expect(r.callbacks).toEqual(["job_template","mine"]);
+});
+test("invalid interrupted job edit ID never surfaces arbitrary callbacks",()=>{
+ for(const bad of [-5,"oops",0,"12.5",Number.MAX_SAFE_INTEGER+1]){
+  const r=activeAction({state:"",filters:{draftJobId:bad,profileDraft:{"имя":"Анна"}}});
+  expect(r.callbacks).toEqual(["edit_profile","wizard:cancel"]);
+ }
+});
