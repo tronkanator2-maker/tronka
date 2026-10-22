@@ -2,6 +2,7 @@ import {SQL} from "bun";
 import {decodeDbRows} from "./db-json.ts";
 import {loadTelegramUser} from "./telegram-user.ts";
 import {jobVisibilityCallback,parseJobVisibilityAction,setJobVisibility} from "./job-visibility.ts";
+import {searchAction,searchMenuFor,setSearchActive} from "./search-state.ts";
 import {parseStartTarget,parseOnboardTarget,parseReferralStart,parseReferralOnboard} from "./deep-links.ts";
 import {leavingToHome} from "./navigation-state.ts";
 import {resumeMenu} from "./resume-menu.ts";
@@ -156,13 +157,13 @@ async function begin(u){
  if(!testReady()||(!testMode()&&!(await legalReady(sql))))return registrationPreview(u.id);
  if(testMode()){
   const resume=resumeMenu(u);
-  return send(u.id,testMenuText+(resume.label?"\n\n📝 "+resume.label:""),{inline_keyboard:[...resume.rows,...menu.inline_keyboard]});
+  return send(u.id,testMenuText+(resume.label?"\n\n📝 "+resume.label:""),{inline_keyboard:[...resume.rows,...searchMenuFor(menu,u).inline_keyboard]});
  }
  const hashes=await currentDocumentHashes();
  if(!fullConsentsCurrent(u.consent,hashes))return send(u.id,"<b>Добро пожаловать в Мир моделей!</b>\nОзнакомьтесь с документами и дайте три отдельных согласия.",consentBoard(u,hashes));
  if(!u.phone)return send(u.id,"Подтвердите ваш собственный номер через кнопку Telegram. Номер не будет опубликован.",{keyboard:[[{text:"📱 Поделиться номером",request_contact:true}]],resize_keyboard:true,one_time_keyboard:true});
  if(!u.username)return send(u.id,"Установите @имя пользователя в настройках Telegram, затем отправьте /start.");
- return send(u.id,"<b>✨ Мир моделей</b>\nВыберите раздел.",menu);
+ return send(u.id,"<b>✨ Мир моделей</b>\nВыберите раздел.",searchMenuFor(menu,u));
 }
 const parse=parseFields;
 const get=field;
@@ -381,7 +382,7 @@ async function showFilterMenu(u){
  if(!matched.length)notice+="\nПока ничего не нашлось — можно изменить фильтры.";
  return send(u.id,notice,buttons([
   [["✏️ Изменить","editfilters"],["📢 Смотреть заявки"+(matched.length?" ("+matched.length+")":""),"jobs"]],
-  [[u.active?"⏸️ Остановить поиск заявок":"▶️ Возобновить поиск заявок","pause"]],[[(f.adult===true?"🔞 Выключить 18+":"🔞 Включить 18+"),"adult_toggle"]]
+  [[u.active?"⏸️ Остановить поиск заявок":"▶️ Возобновить поиск заявок",searchAction(u)]],[[(f.adult===true?"🔞 Выключить 18+":"🔞 Включить 18+"),"adult_toggle"]]
  ]));
 }
 async function backfill(u){const jobs=await sql("SELECT * FROM mm_jobs WHERE status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' ORDER BY created_at DESC LIMIT 100");for(const j of jobs)try{await deliverTo(u,j)}catch(e){console.error("backfill",String(e))}}
@@ -1135,7 +1136,21 @@ if(a.startsWith("jobpause:")){
   await change(id,{filters});return showFilterMenu({...u,filters});
  }
  if(a==="filters")return showFilterMenu(u);
-if(a==="editfilters"){await change(id,{state:"filter"});return send(id,"Отправьте фильтры отдельным сообщением:\n<code>Город: Москва\nТип работы: реклама\nФормат: коммерция</code>\nЕсли строку оставить пустой, ограничение по ней отключится.")}if(a==="pause"){await change(id,{active:!u.active});if(!u.active)await queueProfileRefresh(sql,id);return send(id,u.active?"Поиск приостановлен. Анкета скрыта.":"Поиск возобновлён.")}if(a.startsWith("replyack:")){
+if(a==="editfilters"){await change(id,{state:"filter"});return send(id,"Отправьте фильтры отдельным сообщением:\n<code>Город: Москва\nТип работы: реклама\nФормат: коммерция</code>\nЕсли строку оставить пустой, ограничение по ней отключится.")}if(a==="pause"){
+  // Legacy callbacks are not interpreted as a toggle. A double tap on an
+  // old keyboard must not silently cancel an earlier deliberate action.
+  return send(id,"Управление поиском анкет. Выберите действие:",buttons([[["⏸️ Остановить поиск","search:stop"],["▶️ Возобновить поиск","search:resume"]],[["🏠 В меню","home"]]]));
+ }
+ if(a==="search:stop"||a==="search:resume"){
+  const desired=a==="search:resume";
+  const outcome=await setSearchActive(sql,id,desired);
+  if(outcome.status==="invalid"||outcome.status==="missing")return send(id,"Не удалось изменить поиск. Откройте меню снова.",buttons([[["🏠 В меню","home"]]]));
+  return send(id,outcome.status==="already"?
+    (desired?"Поиск уже включён.":"Поиск уже остановлен."):
+    (desired?"✅ Поиск возобновлён. Подбор поставлен в очередь.":"✅ Поиск остановлен. Анкета скрыта из каталога."),
+    buttons([[["🎯 Фильтры","filters"],["🏠 В меню","home"]]]));
+ }
+ if(a.startsWith("replyack:")){
  const jobId=Number(a.slice("replyack:".length));
  if(!Number.isSafeInteger(jobId)||jobId<=0)return send(id,"Номер заявки не найден.");
  await sql("UPDATE mm_users SET first_reply_ack_at=COALESCE(first_reply_ack_at,NOW()) WHERE id=$1",id);
