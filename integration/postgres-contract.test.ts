@@ -31,8 +31,8 @@ test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay"
   await prepareDecisionNotifications(sql);
 
   await sql("INSERT INTO mm_users(id) VALUES(101),(102),(103)");
-  await sql("INSERT INTO mm_jobs(id,owner) VALUES(201,101)");
-  await sql("INSERT INTO mm_responses(id,job_id,user_id) VALUES(501,201,102),(502,201,102),(503,201,102)");
+  await sql("INSERT INTO mm_jobs(id,owner) VALUES(201,101),(202,101),(203,101)");
+  await sql("INSERT INTO mm_responses(id,job_id,user_id) VALUES(501,201,102),(502,202,102),(503,203,102)");
   await sql("INSERT INTO mm_invitations(id,from_user,to_user) VALUES(601,101,103),(602,101,102),(603,101,103),(604,101,103)");
 
   expect((await setJobVisibility(sql,101,{id:201,paused:true})).status).toBe("changed");
@@ -60,11 +60,11 @@ test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay"
   expect(await relayAuthorized(sql,101,102)).toBe(true);
   expect(await acceptResponseForOwner(sql,502,103)).toBeNull();
 
-  await sql("UPDATE mm_jobs SET status='closed' WHERE id=201");
+  await sql("UPDATE mm_jobs SET status='closed' WHERE id=202");
   expect(await acceptResponseForOwner(sql,502,101)).toBeNull();
-  await sql("UPDATE mm_jobs SET status='active',paused=TRUE WHERE id=201");
+  await sql("UPDATE mm_jobs SET status='active',paused=TRUE WHERE id=202");
   expect(await acceptResponseForOwner(sql,502,101)).toBeNull();
-  await sql("UPDATE mm_jobs SET paused=FALSE WHERE id=201");
+  await sql("UPDATE mm_jobs SET paused=FALSE WHERE id=202");
 
   const invitation=await acceptInvitationForRecipient(sql,601,103);
   expect(invitation.newlyAccepted).toBe(true);
