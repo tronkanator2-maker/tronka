@@ -32,6 +32,7 @@ import {exportAccount,deleteAccount,sendAccountExport} from "./privacy.ts";
 import {parseWithModel} from "./ai-parser.ts";
 import {prepareDocuments,legalReady as legalDocumentsReady,recordConsent,publicDocumentRoute,latestDocuments,documentHashes,allConsentsCurrent as fullConsentsCurrent,consentIsCurrent} from "./documents.ts";
 import {prepareEntitlements,startPhoneTrial,hasPaidAccess as activeSubscription,weekStartMoscow} from "./access.ts";
+import {createResponseWithQuota,createInvitationWithQuota,publishJobWithQuota} from "./quota-actions.ts";
 import {setupFeedback, scheduleFeedback, feedbackTick, feedbackCallback, feedbackText, feedbackSummary} from "./feedback.ts";
 import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity, eligibleProfile, matchesCastingRequirements, isExplicitAdultCasting,matchesWantedProfileRoles,incompleteProfileFields} from "./engine.ts";
 const db=new SQL(Bun.env.DATABASE_URL||"postgres://unconfigured");
@@ -585,33 +586,27 @@ async function submitResponse(u,body){
  if(!Number.isSafeInteger(jobId)||jobId<=0)return send(id,"Черновик отклика больше не найден. Найдите заявку заново.");
  if(!message||message.length>1200)return send(id,"Напишите текст отклика длиной от 1 до 1200 символов. Для отмены — /cancel.");
  if(!eligibleProfile(u.profile,u.photo))return send(id,"Перед откликом заполните анкету и добавьте главное фото.");
- const j=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",jobId))[0];
- if(!j||String(j.owner)===String(id))return send(id,"Заявка недоступна для отклика.");
- const existing=await sql("SELECT id FROM mm_responses WHERE job_id=$1 AND user_id=$2",jobId,id);
- if(existing.length){
-  if(Number(j.owner)!==0)await sql("INSERT INTO mm_response_outbox(response_id) VALUES($1) ON CONFLICT DO NOTHING",existing[0].id);
-  return send(id,"Отклик уже сохранён. Если уведомление ещё не было доставлено заказчику, бот повторит отправку.");
+ const outcome=await createResponseWithQuota(db,{userId:id,jobId,message,paid:hasPaidAccess(u),weekStart:weekStartMoscow()});
+ if(outcome.status==="invalid"||outcome.status==="unavailable")return send(id,"Заявка недоступна для отклика. Откройте актуальный список.");
+ if(outcome.status==="limit")return send(id,"На этой неделе бесплатный отклик уже использован.");
+ if(outcome.status==="duplicate"){
+  const f={...(u.filters||{})};delete f.replyJobId;
+  await change(id,{state:"",filters:f});
+  return send(id,"Отклик уже сохранён. Если заказчик ещё не получил уведомление, бот повторит его доставку.",buttons([[["📬 Мои отклики","myresponses"],["🏠 В меню","home"]]]));
  }
- const quota=await sql("SELECT COUNT(*)::int n FROM mm_responses WHERE user_id=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());
- if(!hasPaidAccess(u)&&quota[0].n>=1)return send(id,"На этой неделе бесплатный отклик уже использован.");
- const inserted=await sql("INSERT INTO mm_responses(job_id,user_id,message) VALUES($1,$2,$3) ON CONFLICT(job_id,user_id) DO NOTHING RETURNING id",jobId,id,message);
- if(!inserted.length)return send(id,"Отклик уже отправлен.");
+ const listing=outcome.listing;
  const f={...(u.filters||{})};delete f.replyJobId;
  await change(id,{state:"",filters:f});
- const owner=Number(j.owner)===0?null:(await sql("SELECT * FROM mm_users WHERE id=$1",j.owner))[0];
- if(owner){
-  await sql("INSERT INTO mm_response_outbox(response_id) VALUES($1) ON CONFLICT DO NOTHING",inserted[0].id);
- }
- if(j.contact){
-  const contact=String(j.contact).trim(),username=contact.replace(/^@/,"");
+ if(listing.contact){
+  const contact=String(listing.contact).trim(),username=contact.replace(/^@/,"");
   if(/^[A-Za-z0-9_]{5,32}$/.test(username)){
-   const text="Здравствуйте! Откликаюсь на вашу заявку «"+get(j.body,"название заявки")+"». "+message;
+   const text="Здравствуйте! Откликаюсь на вашу заявку «"+get(listing.body,"название заявки")+"». "+message;
    return send(id,"Отклик учтён. Откройте чат с автором и отправьте подготовленное сообщение:",{inline_keyboard:[[{text:"✉️ Открыть чат автора",url:"https://t.me/"+username+"?text="+encodeURIComponent(text)}]]});
   }
   return send(id,"Отклик учтён. Контакт автора объявления: "+esc(contact)+"\nВаш текст: "+esc(message));
  }
- if(owner)return send(id,"✅ Отклик сохранён. Уведомление заказчику поставлено в очередь, контакт откроется после принятия.");
- return send(id,owner?"Отклик сохранён и отправлен заказчику.":"Отклик сохранён, но у внешнего объявления нет доступного контакта.");
+ if(Number(listing.owner)!==0)return send(id,"✅ Отклик сохранён. Уведомление заказчику поставлено в очередь, контакт откроется после принятия.");
+ return send(id,"Отклик сохранён, но у внешнего объявления нет доступного контакта.");
 }
 
 async function onMessage(m){
@@ -1018,15 +1013,23 @@ if(a==="addphoto"){
   await change(id,{filters});
   const current={...u,filters};
   return jobWizardFinished(filters.jobWizardStep)?finishJobWizard(current):jobWizardPrompt(current);
- }if(a==="publish"){let p=u.filters?.draft;if(u.state!=="job_confirm"||!p)return send(id,"Сначала проверьте и подтвердите актуальную версию заявки.");let n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());if(!hasPaidAccess(u)&&n[0].total)return send(id,"Без подписки можно разместить одну новую заявку с понедельника по воскресенье.");n=await sql("SELECT count(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",id);if(n[0].total>=10)return send(id,"Лимит: 10 активных заявок.");const token=u.filters?.draftToken||("legacy:"+id+":"+Bun.hash(JSON.stringify(p)).toString(36));
- const saved=await sql("INSERT INTO mm_jobs(owner,body,expires_at,draft_token) VALUES($1,$2::jsonb,$3,$4) ON CONFLICT DO NOTHING RETURNING *",id,JSON.stringify(p),jobExpiresAt(get(p,"дата съёмки")).toISOString(),token);
- if(!saved.length){
-  const already=(await sql("SELECT id FROM mm_jobs WHERE owner=$1 AND draft_token=$2",id,token))[0];
-  return send(id,already?"Заявка №"+already.id+" уже опубликована. Вторую копию не создаём.":"Заявка уже обрабатывается. Проверьте «Мои заявки».");
+ }if(a==="publish"){
+  const draft=u.filters?.draft;
+  if(u.state!=="job_confirm"||!draft)return send(id,"Сначала проверьте и подтвердите актуальную версию заявки.");
+  const token=u.filters?.draftToken||("legacy:"+id+":"+Bun.hash(JSON.stringify(draft)).toString(36));
+  const outcome=await publishJobWithQuota(db,{ownerId:id,body:draft,expiresAt:jobExpiresAt(get(draft,"дата съёмки")),draftToken:token,paid:hasPaidAccess(u)});
+  if(outcome.status==="limit")return send(id,outcome.maxActive===1?
+    "Без подписки доступна одна активная собственная заявка. Остановите текущую в разделе «Мои заявки», чтобы опубликовать другую.":
+    "У вас уже 10 активных заявок — это максимум. Остановите поиск по одной из них или обратитесь в поддержку.",
+    buttons([[["📌 Мои заявки","mine"],["💬 Поддержка","support"]]]));
+  if(outcome.status==="invalid")return send(id,"Не удалось подтвердить заявку. Проверьте заполненные поля.");
+  if(outcome.status==="duplicate")return send(id,outcome.jobId?
+    "Заявка №"+outcome.jobId+" уже опубликована. Вторую копию не создаём.":
+    "Заявка уже обрабатывается. Проверьте «Мои заявки».",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
+  const filters={...(u.filters||{})};delete filters.draft;delete filters.draftToken;
+  await change(id,{state:"",filters});
+  return send(id,"✅ Заявка №"+outcome.jobId+" опубликована. Подбор поставлен в очередь.");
  }
- const row=saved[0],filters={...(u.filters||{})};delete filters.draft;delete filters.draftToken;
- await change(id,{state:"",filters});
- await send(id,"✅ Заявка №"+row.id+" опубликована.");await dispatch(row);return}
  if(a==="jobs"||a.startsWith("jobs:")){
   const offset=parsePageOffset(a,"jobs");
   if(offset===null)return send(id,"Страница поиска недоступна.",buttons([[["🔎 Начать поиск","jobs"],["🏠 В меню","home"]]]));
@@ -1173,26 +1176,21 @@ if(a==="editfilters"){await change(id,{state:"filter"});return send(id,"Отпр
  return send(id,"✉️ <b>Отклик на заявку №"+jobId+"</b>\nНапишите своё сообщение заказчику одним текстом: уточните интересующие детали или укажите кодовое слово из заявки.\n\nТекст будет отправлен заказчику, а сам отклик засчитается только после отправки. Для отмены — /cancel.");
 }
 if(a.startsWith("invite:"))return inviteCreationQueue(id,async()=>{
-  const target=Number(a.slice("invite:".length));
-  if(!Number.isSafeInteger(target)||target<=0||target===id)return send(id,"Некорректный получатель приглашения.");
-  const hashes=await currentDocumentHashes();
-  if(!publicProfileAllowed(u,hashes,allConsentsCurrent,eligibleProfile))
-   return send(id,"Чтобы отправлять приглашения, сначала завершите анкету и добавьте главное фото.");
-  const peer=(await sql("SELECT * FROM mm_users WHERE id=$1",target))[0];
-  if(!publicProfileAllowed(peer,hashes,allConsentsCurrent,eligibleProfile))
-   return send(id,"Этот участник сейчас недоступен для приглашений.");
-  const duplicate=(await sql("SELECT id FROM mm_invitations WHERE from_user=$1 AND to_user=$2 AND status IN ('sent','accepted') ORDER BY id DESC LIMIT 1",id,target))[0];
-  if(duplicate){
-   await queueInitialInvitation(sql,duplicate.id);
-   return send(id,"Приглашение этому участнику уже есть. Если оно ещё не доставлено, бот повторит отправку.",buttons([[["✉️ Мои приглашения","myinvites"],["🏠 В меню","home"]]]));
-  }
-  const count=await sql("SELECT COUNT(*)::int n FROM mm_invitations WHERE from_user=$1 AND created_at>=$2",id,weekStartMoscow().toISOString());
-  if(!hasPaidAccess(u)&&count[0].n>=1)return send(id,"Без подписки доступно одно приглашение с понедельника по воскресенье.");
-  const invited=(await sql("INSERT INTO mm_invitations(from_user,to_user) VALUES($1,$2) RETURNING id",id,target))[0];
-  await queueInitialInvitation(sql,invited.id);
-  return send(id,"✅ Приглашение №"+invited.id+" сохранено и поставлено в очередь. Бот отправит анкету и кнопки принятия/отклонения.",buttons([[["✉️ Мои приглашения","myinvites"],["🏠 В меню","home"]]]));
- });
- if(a.startsWith("rejectinvite:")){
+   const target=Number(a.slice("invite:".length));
+   if(!Number.isSafeInteger(target)||target<=0||target===Number(id))return send(id,"Некорректный получатель приглашения.");
+   const hashes=await currentDocumentHashes();
+   if(!publicProfileAllowed(u,hashes,allConsentsCurrent,eligibleProfile))
+    return send(id,"Чтобы отправлять приглашения, сначала завершите анкету и добавьте главное фото.");
+   const peer=(await sql("SELECT * FROM mm_users WHERE id=$1",target))[0];
+   if(!publicProfileAllowed(peer,hashes,allConsentsCurrent,eligibleProfile))
+    return send(id,"Этот участник сейчас недоступен для приглашений.");
+   const outcome=await createInvitationWithQuota(db,{fromUser:id,toUser:target,paid:hasPaidAccess(u),weekStart:weekStartMoscow()});
+   if(outcome.status==="unavailable"||outcome.status==="invalid")return send(id,"Приглашение недоступно: профиль одного из участников скрыт или ограничен.");
+   if(outcome.status==="limit")return send(id,"Без подписки доступно одно приглашение с понедельника по воскресенье.");
+   if(outcome.status==="duplicate")return send(id,"Приглашение этому участнику уже есть. Если оно ещё не доставлено, бот повторит отправку.",buttons([[["✉️ Мои приглашения","myinvites"],["🏠 В меню","home"]]]));
+   return send(id,"✅ Приглашение №"+outcome.invitationId+" сохранено и поставлено в очередь. Бот отправит анкету и кнопки принятия/отклонения.",buttons([[["✉️ Мои приглашения","myinvites"],["🏠 В меню","home"]]]));
+  });
+  if(a.startsWith("rejectinvite:")){
   const decision=await updateCollaborationDecision(sql,"invitation_declined",a.slice("rejectinvite:".length),id);
   if(!decision)return send(id,"Приглашение недоступно или уже обработано.");
   return send(id,decision.newlyChanged?
