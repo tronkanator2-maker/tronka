@@ -47,7 +47,7 @@ test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay"
   expect(refreshed[0].pending).toBe(true);
 
   const accepted=await acceptResponseForOwner(sql,501,101);
-  expect(accepted.id).toBe(501);
+  expect(String(accepted.id)).toBe("501");
   expect(accepted.newlyAccepted).toBe(true);
   expect((await sql("SELECT status FROM mm_responses WHERE id=501"))[0].status).toBe("accepted");
   expect((await sql("SELECT COUNT(*)::int AS n FROM mm_accepted_response_outbox WHERE response_id=501"))[0].n).toBe(1);
