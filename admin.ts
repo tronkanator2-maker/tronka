@@ -2,6 +2,7 @@ import {publishDocument,legalReady,latestDocuments} from "./documents.ts";
 import {inferCity} from "./engine.ts";
 import {adminHtml} from "./admin-ui.ts";
 import {listGuideEditors,publishGuideRevision} from "./guide-editor.ts";
+import {readQuotaSettings,updateQuotaSetting} from "./quota-settings.ts";
 import {prepareModerators,createModerator,authenticateModerator,updateModeratorStatus} from "./admin-moderators.ts";
 import {ADMIN_SECTIONS,readAdminList,readFinanceSummary,canAdminAct} from "./admin-data.ts";
 // Minimal secured operational dashboard. Disabled until ADMIN_PASSWORD is configured.
@@ -78,6 +79,10 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
    if(session.role!=="owner")return json({error:"Редактировать статьи может только владелец"},403);
    return json({role:session.role,articles:await listGuideEditors(sql)});
   }
+  if(section==="quotas"){
+   if(session.role!=="owner")return json({error:"Лимиты меняет только владелец"},403);
+   return json({role:session.role,quotas:await readQuotaSettings(sql)});
+  }
   if(section==="finance"){
    if(session.role!=="owner")return json({error:"Только владелец может просматривать финансы"},403);
    return json({role:session.role,finance:await readFinanceSummary(sql)});
@@ -108,6 +113,15 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
   let data;try{data=await req.json()}catch{return json({error:"Некорректный запрос"},400)}
   const action=String(data?.action||"");
   if(!canAdminAct(session.role,action))return json({error:"Недостаточно прав для этого действия"},403);
+  if(action==="quota_update"){
+   try{
+    const previous=(await readQuotaSettings(sql)).find(x=>x.key===String(data.key));
+    const setting=await updateQuotaSetting(sql,data.key,data.value);
+    await sql("INSERT INTO mm_admin_log(actor,action,details) VALUES(0,'quota_update',$1::jsonb)",
+     JSON.stringify({key:setting.key,previous:previous?.value??null,next:setting.value,by:session.principalName}));
+    return json({ok:true,setting,message:"Лимит обновлён. Изменение действует для новых действий пользователей."});
+   }catch(error){return json({error:String(error.message||error)},400)}
+  }
   if(action==="moderator_create"){
    try{
     const moderator=await createModerator(sql,data.username,data.password);
