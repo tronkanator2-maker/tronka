@@ -9,6 +9,7 @@ import {prepareDecisionNotifications,updateCollaborationDecision,deliverDecision
 import {createResponseWithQuota,createInvitationWithQuota,publishJobWithQuota,changeJobVisibilityWithQuota} from "../quota-actions.ts";
 import {prepareInvitationOutbox} from "../invitation-delivery.ts";
 import {prepareQuotaSettings,updateQuotaSetting,readQuotaSettings} from "../quota-settings.ts";
+import {prepareEntitlements,startPhoneTrial} from "../access.ts";
 
 // This suite runs ONLY against the disposable PostgreSQL 16 service in CI.
 // It must never use DATABASE_URL or connect to Railway/production.
@@ -28,11 +29,27 @@ test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay"
   await sql("CREATE TABLE mm_response_outbox(response_id BIGINT PRIMARY KEY, step INTEGER NOT NULL DEFAULT 0)");
   await prepareInvitationOutbox(sql);
   await prepareQuotaSettings(sql);
+  await prepareEntitlements(sql);
   await prepareAcceptedResponseOutbox(sql);
   await prepareAcceptedInvitationOutbox(sql);
   await prepareDecisionNotifications(sql);
 
   await sql("INSERT INTO mm_users(id) VALUES(101),(102),(103)");
+  // Trial numbers may only be consumed by eligible existing accounts.
+  const trialPepper="isolated-ci-phone-secret";
+  const noAccount=await startPhoneTrial(sql,999901,"+7 999 999-00-01",trialPepper);
+  expect(noAccount.started).toBe(false);
+  expect((await sql("SELECT COUNT(*)::int n FROM mm_trial_ledger"))[0].n).toBe(0);
+  await sql("INSERT INTO mm_users(id,trial_until) VALUES(999902,NOW()+INTERVAL '2 days')");
+  const preexisting=await startPhoneTrial(sql,999902,"+7 999 999-00-02",trialPepper);
+  expect(preexisting.started).toBe(false);
+  expect((await sql("SELECT COUNT(*)::int n FROM mm_trial_ledger"))[0].n).toBe(0);
+  await sql("INSERT INTO mm_users(id) VALUES(999903),(999904)");
+  const trial=await startPhoneTrial(sql,999903,"+7 999 999-00-03",trialPepper);
+  expect(trial.started).toBe(true);
+  expect((await sql("SELECT COUNT(*)::int n FROM mm_trial_ledger"))[0].n).toBe(1);
+  expect((await startPhoneTrial(sql,999904,"+7 999 999-00-03",trialPepper)).started).toBe(false);
+  expect((await sql("SELECT trial_until FROM mm_users WHERE id=999904"))[0].trial_until).toBeNull();
   await sql("INSERT INTO mm_jobs(id,owner) VALUES(201,101),(202,101),(203,101)");
   await sql("INSERT INTO mm_responses(id,job_id,user_id) VALUES(501,201,102),(502,202,102),(503,203,102)");
   await sql("INSERT INTO mm_invitations(id,from_user,to_user) VALUES(601,101,103),(602,101,102),(603,101,103),(604,101,103)");
