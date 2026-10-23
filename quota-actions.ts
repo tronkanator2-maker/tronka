@@ -1,4 +1,5 @@
 import {setJobVisibility} from "./job-visibility.ts";
+import {getQuotaValue} from "./quota-settings.ts";
 // Critical user actions share a PostgreSQL transaction and a per-user lock.
 // SELECT COUNT followed by INSERT outside a transaction permits simultaneous
 // callbacks to exceed quotas. All three flows are atomic and retry-safe.
@@ -30,7 +31,7 @@ export async function createResponseWithQuota(db,{userId,jobId,message,paid=fals
  const week=weekStamp(weekStart);
  return withUserActionLock(db,actor,async sql=>{
   // The row lock prevents a concurrent close/pause while the response commits.
-  const listings=await sql("SELECT id,owner,contact,body FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW() FOR SHARE",job);
+  const listings=await sql("SELECT id,owner,contact,body FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW() FOR UPDATE",job);
   const listing=listings[0];
   if(!listing||isIdEqual(listing.owner,actor))return {status:"unavailable"};
   const previous=await sql("SELECT id,status FROM mm_responses WHERE job_id=$1 AND user_id=$2",job,actor);
@@ -42,7 +43,7 @@ export async function createResponseWithQuota(db,{userId,jobId,message,paid=fals
   }
   if(!paid){
    const used=await sql("SELECT COUNT(*)::int AS n FROM mm_responses WHERE user_id=$1 AND created_at>=$2",actor,week);
-   if(Number(used[0]?.n||0)>=1)return {status:"limit"};
+   if(Number(used[0]?.n||0)>=await getQuotaValue(sql,"free_responses_week"))return {status:"limit"};
   }
   const inserted=await sql("INSERT INTO mm_responses(job_id,user_id,message) VALUES($1,$2,$3) ON CONFLICT(job_id,user_id) DO NOTHING RETURNING id",job,actor,message.trim());
   if(!inserted.length)return {status:"duplicate"};
@@ -67,7 +68,7 @@ export async function createInvitationWithQuota(db,{fromUser,toUser,paid=false,w
   }
   if(!paid){
    const used=await sql("SELECT COUNT(*)::int AS n FROM mm_invitations WHERE from_user=$1 AND created_at>=$2",sender,week);
-   if(Number(used[0]?.n||0)>=1)return {status:"limit"};
+   if(Number(used[0]?.n||0)>=await getQuotaValue(sql,"free_invitations_week"))return {status:"limit"};
   }
   const inserted=await sql("INSERT INTO mm_invitations(from_user,to_user) VALUES($1,$2) RETURNING id",sender,recipient);
   if(!inserted.length)throw Error("Invitation insert returned no row");
@@ -76,18 +77,17 @@ export async function createInvitationWithQuota(db,{fromUser,toUser,paid=false,w
  });
 }
 
-export async function publishJobWithQuota(db,{ownerId,body,expiresAt,draftToken,paid=false,maxActive=10}){
+export async function publishJobWithQuota(db,{ownerId,body,expiresAt,draftToken,paid=false}){
  const owner=positiveId(ownerId),token=String(draftToken||"");
  if(!owner||!body||typeof body!=="object"||Array.isArray(body)||!token||token.length>180)
   return {status:"invalid"};
  const expires=new Date(expiresAt);
  if(!Number.isFinite(expires.getTime()))return {status:"invalid"};
- if(!Number.isSafeInteger(maxActive)||maxActive<1||maxActive>1000)return {status:"invalid"};
  return withUserActionLock(db,owner,async sql=>{
   const previous=await sql("SELECT id FROM mm_jobs WHERE owner=$1 AND draft_token=$2",owner,token);
   if(previous.length)return {status:"duplicate",jobId:previous[0].id};
   const active=await sql("SELECT COUNT(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",owner);
-  const limit=paid?maxActive:1;
+  const limit=await getQuotaValue(sql,paid?"paid_active_jobs":"free_active_jobs");
   if(Number(active[0]?.total||0)>=limit)return {status:"limit",maxActive:limit};
   const inserted=await sql("INSERT INTO mm_jobs(owner,body,expires_at,draft_token) VALUES($1,$2::jsonb,$3,$4) ON CONFLICT DO NOTHING RETURNING *",owner,JSON.stringify(body),expires.toISOString(),token);
   if(!inserted.length){
@@ -105,10 +105,9 @@ export async function publishJobWithQuota(db,{ownerId,body,expiresAt,draftToken,
  });
 }
 
-export async function changeJobVisibilityWithQuota(db,ownerId,action,paid=false,maxActive=10){
+export async function changeJobVisibilityWithQuota(db,ownerId,action,paid=false){
  const owner=positiveId(ownerId),job=positiveId(action?.id);
- if(!owner||!job||typeof action?.paused!=="boolean"||
-    !Number.isSafeInteger(maxActive)||maxActive<1||maxActive>1000)return {status:"invalid"};
+ if(!owner||!job||typeof action?.paused!=="boolean")return {status:"invalid"};
  return withUserActionLock(db,owner,async sql=>{
   if(!action.paused){
    const records=await sql("SELECT id,paused,expires_at FROM mm_jobs WHERE id=$1 AND owner=$2 AND status='active' FOR UPDATE",job,owner);
@@ -116,7 +115,7 @@ export async function changeJobVisibilityWithQuota(db,ownerId,action,paid=false,
    if(!existing||new Date(existing.expires_at)<=new Date())return {status:"missing"};
    if(!existing.paused)return {status:"already",paused:false};
    const rows=await sql("SELECT COUNT(*)::int AS total FROM mm_jobs WHERE owner=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",owner);
-   const limit=paid?maxActive:1;
+   const limit=await getQuotaValue(sql,paid?"paid_active_jobs":"free_active_jobs");
    if(Number(rows[0]?.total||0)>=limit)return {status:"limit",maxActive:limit,paused:true};
   }
   return setJobVisibility(sql,owner,action);
