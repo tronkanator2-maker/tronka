@@ -11,7 +11,7 @@ export const QUOTA_DEFINITIONS=Object.freeze({
 });
 export const quotaKeys=Object.freeze(Object.keys(QUOTA_DEFINITIONS));
 export function validateQuota(key,value){
- const definition=QUOTA_DEFINITIONS[String(key)];
+ const definition=Object.hasOwn(QUOTA_DEFINITIONS,String(key))?QUOTA_DEFINITIONS[String(key)]:null;
  if(!definition)throw Error("Неизвестный лимит");
  const number=Number(value);
  if(!Number.isSafeInteger(number)||number<definition.min||number>definition.max||String(value).trim()==="")
@@ -34,7 +34,7 @@ export async function readQuotaSettings(sql){
  });
 }
 export async function getQuotaValue(sql,key){
- const definition=QUOTA_DEFINITIONS[key];
+ const definition=Object.hasOwn(QUOTA_DEFINITIONS,String(key))?QUOTA_DEFINITIONS[String(key)]:null;
  if(!definition)throw Error("Неизвестный лимит");
  const found=await sql("SELECT value FROM mm_quota_settings WHERE key=$1",key);
  const value=Number(found[0]?.value);
