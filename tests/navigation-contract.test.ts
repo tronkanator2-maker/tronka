@@ -196,7 +196,7 @@ test("catalog page sends one summary and opens one currently visible profile at 
  expect(listing.match(/\bsend\(/g)?.length).toBe(1);
  const callback=source.slice(source.indexOf('if(a.startsWith("profile_view:"))'),source.indexOf('if(a.startsWith("browse:"))'));
  expect(callback).toContain("publicProfileAllowed(target");
- expect(callback).toContain('return profile(id,target,"Анкета в каталоге","browse:"+offset)');
+ expect(callback).toContain('return showProfileWithDailyLimit(u,target,"Анкета в каталоге","browse:"+offset)');
 });
 
 test("a sixth new photo gives a visible limit response and does not trap upload state",()=>{
@@ -293,4 +293,17 @@ test("free owner job slot and weekly response/invite quotas commit with outbox i
  const reply=source.slice(source.indexOf("async function submitResponse("),source.indexOf("async function onMessage("));
  expect(reply).not.toContain('SELECT COUNT(*)::int n FROM mm_responses');
  expect(source).not.toContain('Без подписки можно разместить одну новую заявку с понедельника по воскресенье.');
+});
+
+test("free daily card quotas gate the catalog, deep links and fanout without leaking extra cards",()=>{
+ expect(source).toContain("await prepareDailyViews(sql)");
+ expect(source).toContain("claimDailyView(db,{userId:u.id,kind:\"job\"");
+ expect(source).toContain("claimDailyView(db,{userId:u.id,kind:\"profile\"");
+ expect(source).toContain("claimDailyView(db,{userId:job.owner,kind:\"profile\"");
+ expect(source).toContain('return showJobWithDailyLimit(u,job,"jobs:"+offset)');
+ expect(source).toContain('return showProfileWithDailyLimit(u,target,"Анкета в каталоге","browse:"+offset)');
+ expect(source).toContain("await showJobWithDailyLimit(u,j)");
+ expect(source).toContain("await showProfileWithDailyLimit(u,target)");
+ expect(source).toContain("releaseUnsentDailyView(sql,");
+ expect(source).toContain("dailyLimitText(");
 });
