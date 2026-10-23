@@ -21,7 +21,10 @@ test("claiming a one-time trial is atomic and does not store clear-text phone",a
  const result=await startPhoneTrial(fake,42,"+7 900 555-44-33","unit-test-pepper");
  expect(result.started).toBe(true);
  expect(operations).toHaveLength(1);
- expect(operations[0].query).toContain("WITH claimed AS");
+ expect(operations[0].query).toContain("WITH eligible AS");
+ expect(operations[0].query).toContain("trial_until IS NULL FOR UPDATE");
+ expect(operations[0].query).toContain("SELECT $1,id FROM eligible");
+ expect(operations[0].query).toContain("WITH eligible AS");
  expect(operations[0].query).toContain("UPDATE mm_users");
  expect(operations[0].args[0]).not.toContain("79005554433");
  expect(operations[0].args[1]).toBe(42);
@@ -31,4 +34,13 @@ test("missing dedicated pepper never consumes trial",async()=>{
  const result=await startPhoneTrial(async()=>{count++;return []},11,"+7 900 555-44-33","");
  expect(result.started).toBe(false);
  expect(count).toBe(0);
+});
+
+test("trial only inserts a phone claim for an eligible row and never double claims",async()=>{
+ let queryText="";
+ await startPhoneTrial(async sql=>{queryText=sql;return []},90001,"+7 (999) 111-22-33","separate-secret");
+ expect(queryText).toContain("SELECT id FROM mm_users WHERE id=$2 AND trial_until IS NULL FOR UPDATE");
+ expect(queryText).toContain("SELECT $1,id FROM eligible");
+ expect(queryText).toContain("ON CONFLICT DO NOTHING");
+ expect(queryText).toContain("trial_until=NOW()+INTERVAL '15 days'");
 });
