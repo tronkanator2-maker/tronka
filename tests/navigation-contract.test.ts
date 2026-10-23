@@ -284,7 +284,7 @@ test("free owner job slot and weekly response/invite quotas commit with outbox i
  expect(source).toContain("publishJobWithQuota(db,");
  expect(quotasSource).toContain("db.begin(async tx=>");
  expect(quotasSource).toContain("pg_advisory_xact_lock");
- expect(quotasSource).toContain("const limit=paid?maxActive:1");
+ expect(quotasSource).toContain('getQuotaValue(sql,paid?"paid_active_jobs":"free_active_jobs")');
  expect(quotasSource).toContain("export async function changeJobVisibilityWithQuota");
  expect(quotasSource).toContain("created_at>=$2");
  expect(quotasSource).toContain("INSERT INTO mm_response_outbox(response_id)");
