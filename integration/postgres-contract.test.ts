@@ -8,6 +8,7 @@ import {relayAuthorized} from "../relay.ts";
 import {prepareDecisionNotifications,updateCollaborationDecision,deliverDecisionNotifications} from "../decision-notifications.ts";
 import {createResponseWithQuota,createInvitationWithQuota,publishJobWithQuota,changeJobVisibilityWithQuota} from "../quota-actions.ts";
 import {prepareInvitationOutbox} from "../invitation-delivery.ts";
+import {prepareQuotaSettings,updateQuotaSetting,readQuotaSettings} from "../quota-settings.ts";
 
 // This suite runs ONLY against the disposable PostgreSQL 16 service in CI.
 // It must never use DATABASE_URL or connect to Railway/production.
@@ -18,7 +19,7 @@ const sql=(query,...args)=>client.unsafe(query,args);
 
 test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay",async()=>{
  try{
-  await sql("CREATE TABLE mm_users(id BIGINT PRIMARY KEY,active BOOLEAN NOT NULL DEFAULT TRUE,blocked BOOLEAN NOT NULL DEFAULT FALSE,suspended BOOLEAN NOT NULL DEFAULT FALSE)");
+  await sql("CREATE TABLE mm_users(id BIGINT PRIMARY KEY,active BOOLEAN NOT NULL DEFAULT TRUE,blocked BOOLEAN NOT NULL DEFAULT FALSE,suspended BOOLEAN NOT NULL DEFAULT FALSE,trial_until TIMESTAMPTZ,access_until TIMESTAMPTZ)");
   await sql("CREATE TABLE mm_jobs(id BIGSERIAL PRIMARY KEY,owner BIGINT NOT NULL,status TEXT NOT NULL DEFAULT 'active',paused BOOLEAN NOT NULL DEFAULT FALSE,expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW()+INTERVAL '7 days',body JSONB NOT NULL DEFAULT '{}'::jsonb,contact TEXT,draft_token TEXT,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),UNIQUE(owner,draft_token))");
   await sql("CREATE TABLE mm_fanout_queue(job_id BIGINT PRIMARY KEY,pending BOOLEAN NOT NULL DEFAULT TRUE,cursor_id BIGINT NOT NULL DEFAULT 0,profile_cursor_id BIGINT NOT NULL DEFAULT 0,generation BIGINT NOT NULL DEFAULT 1,profiles_done BOOLEAN NOT NULL DEFAULT FALSE,attempts INTEGER NOT NULL DEFAULT 0,completed_at TIMESTAMPTZ,next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
   await sql("CREATE TABLE mm_profile_refresh_queue(user_id BIGINT PRIMARY KEY,phase TEXT NOT NULL DEFAULT 'matches',cursor_job_id BIGINT NOT NULL DEFAULT 0,generation BIGINT NOT NULL DEFAULT 1,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),completed_at TIMESTAMPTZ,pending BOOLEAN NOT NULL DEFAULT TRUE)");
@@ -26,6 +27,7 @@ test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay"
   await sql("CREATE TABLE mm_invitations(id BIGSERIAL PRIMARY KEY,from_user BIGINT NOT NULL REFERENCES mm_users(id),to_user BIGINT NOT NULL REFERENCES mm_users(id),status TEXT NOT NULL DEFAULT 'sent',created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
   await sql("CREATE TABLE mm_response_outbox(response_id BIGINT PRIMARY KEY, step INTEGER NOT NULL DEFAULT 0)");
   await prepareInvitationOutbox(sql);
+  await prepareQuotaSettings(sql);
   await prepareAcceptedResponseOutbox(sql);
   await prepareAcceptedInvitationOutbox(sql);
   await prepareDecisionNotifications(sql);
@@ -155,6 +157,33 @@ test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay"
   expect((await sql("SELECT paused FROM mm_jobs WHERE id=$1",activePublished.jobId))[0].paused).toBe(false);
 
 
+  // Limits are owner-configurable without a code release. The newly
+  // allowed second action must still commit its queued notice.
+  const changedReply=await updateQuotaSetting(sql,"free_responses_week",2);
+  expect(changedReply.value).toBe(2);
+  const adjusted=await createResponseWithQuota(client,{userId:1100,jobId:firstJob==="1101"?1102:1101,
+   message:"Второй отклик после изменения лимита",paid:false,weekStart:monday});
+  expect(adjusted.status).toBe("created");
+  const updatedInvites=await updateQuotaSetting(sql,"free_invitations_week",2);
+  expect(updatedInvites.value).toBe(2);
+  const invitedPeers=await sql("SELECT to_user FROM mm_invitations WHERE from_user=1300");
+  const otherPeer=String(invitedPeers[0].to_user)==="1200"?1201:1200;
+  expect((await createInvitationWithQuota(client,{fromUser:1300,toUser:otherPeer,paid:false,weekStart:monday})).status).toBe("created");
+  const settings=await readQuotaSettings(sql);
+  expect(settings.find(x=>x.key==="free_invitations_week").value).toBe(2);
+
+  // Concurrent callers to a free owner's job must receive at most the
+  // configured first five responses; further attempts do not create rows.
+  await sql("INSERT INTO mm_users(id) VALUES(1410),(1411),(1412),(1413),(1414),(1415)");
+  await sql("INSERT INTO mm_jobs(id,owner) VALUES(1500,1201)");
+  const firstSix=await Promise.all([1410,1411,1412,1413,1414,1415].map(userId=>
+   createResponseWithQuota(client,{userId,jobId:1500,message:"Хочу участвовать",paid:true,weekStart:monday})));
+  expect(firstSix.filter(x=>x.status==="created")).toHaveLength(5);
+  expect(firstSix.filter(x=>x.status==="job_full")).toHaveLength(1);
+  expect((await sql("SELECT COUNT(*)::int AS n FROM mm_responses WHERE job_id=1500"))[0].n).toBe(5);
+  await updateQuotaSetting(sql,"free_inbound_responses",6);
+  const blockedApplicant=[1410,1411,1412,1413,1414,1415].find((_,i)=>firstSix[i].status==="job_full");
+  expect((await createResponseWithQuota(client,{userId:blockedApplicant,jobId:1500,message:"Повтор после лимита 6",paid:true,weekStart:monday})).status).toBe("created");
   // Insufficient access must not reserve a quota or emit a notification.
   await sql("UPDATE mm_users SET blocked=TRUE WHERE id=1202");
   expect((await createInvitationWithQuota(client,{fromUser:1100,toUser:1202,paid:false,weekStart:monday})).status).toBe("unavailable");
