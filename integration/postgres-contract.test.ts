@@ -9,6 +9,7 @@ import {prepareDecisionNotifications,updateCollaborationDecision,deliverDecision
 import {createResponseWithQuota,createInvitationWithQuota,publishJobWithQuota,changeJobVisibilityWithQuota} from "../quota-actions.ts";
 import {prepareInvitationOutbox} from "../invitation-delivery.ts";
 import {prepareQuotaSettings,updateQuotaSetting,readQuotaSettings} from "../quota-settings.ts";
+import {prepareDailyViews,claimDailyView} from "../daily-views.ts";
 import {prepareEntitlements,startPhoneTrial} from "../access.ts";
 
 // This suite runs ONLY against the disposable PostgreSQL 16 service in CI.
@@ -29,6 +30,7 @@ test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay"
   await sql("CREATE TABLE mm_response_outbox(response_id BIGINT PRIMARY KEY, step INTEGER NOT NULL DEFAULT 0)");
   await prepareInvitationOutbox(sql);
   await prepareQuotaSettings(sql);
+  await prepareDailyViews(sql);
   await prepareEntitlements(sql);
   await prepareAcceptedResponseOutbox(sql);
   await prepareAcceptedInvitationOutbox(sql);
@@ -201,6 +203,22 @@ test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay"
   await updateQuotaSetting(sql,"free_inbound_responses",6);
   const blockedApplicant=[1410,1411,1412,1413,1414,1415].find((_,i)=>firstSix[i].status==="job_full");
   expect((await createResponseWithQuota(client,{userId:blockedApplicant,jobId:1500,message:"Повтор после лимита 6",paid:true,weekStart:monday})).status).toBe("created");
+  // Real PostgreSQL, not mocks: concurrent free card opens are serialized
+  // per user. Profile and job allowances are independent, and the day turns
+  // over exactly at Moscow midnight.
+  const checkDay=new Date("2026-10-18T20:58:00Z");
+  const freeItems=await Promise.all([8001,8002,8003,8004,8005,8006].map(itemId=>
+   claimDailyView(client,{userId:1100,kind:"job",itemId,at:checkDay})));
+  expect(freeItems.filter(x=>x.allowed)).toHaveLength(5);
+  expect(freeItems.filter(x=>!x.allowed)).toHaveLength(1);
+  expect((await claimDailyView(client,{userId:1100,kind:"job",itemId:8001,at:checkDay})).already).toBe(true);
+  expect((await sql("SELECT COUNT(*)::int n FROM mm_daily_views WHERE user_id=1100 AND kind='job'"))[0].n).toBe(5);
+  const profileItems=await Promise.all([9101,9102,9103,9104].map(itemId=>
+   claimDailyView(client,{userId:1100,kind:"profile",itemId,at:checkDay})));
+  expect(profileItems.filter(x=>x.allowed)).toHaveLength(3);
+  expect(profileItems.filter(x=>!x.allowed)).toHaveLength(1);
+  expect((await claimDailyView(client,{userId:1100,kind:"job",itemId:8006,at:new Date("2026-10-18T21:00:01Z")})).allowed).toBe(true);
+
   // Insufficient access must not reserve a quota or emit a notification.
   await sql("UPDATE mm_users SET blocked=TRUE WHERE id=1202");
   expect((await createInvitationWithQuota(client,{fromUser:1100,toUser:1202,paid:false,weekStart:monday})).status).toBe("unavailable");
