@@ -34,6 +34,7 @@ import {prepareDocuments,legalReady as legalDocumentsReady,recordConsent,publicD
 import {prepareEntitlements,startPhoneTrial,hasPaidAccess as activeSubscription,weekStartMoscow} from "./access.ts";
 import {createResponseWithQuota,createInvitationWithQuota,publishJobWithQuota,changeJobVisibilityWithQuota} from "./quota-actions.ts";
 import {prepareQuotaSettings} from "./quota-settings.ts";
+import {prepareDailyViews,claimDailyView,releaseUnsentDailyView,dailyLimitText} from "./daily-views.ts";
 import {setupFeedback, scheduleFeedback, feedbackTick, feedbackCallback, feedbackText, feedbackSummary} from "./feedback.ts";
 import {ROLES, MODEL_ROLES, parseFields, field, ageAt, jobExpiresAt, moderate, parseSourcePost, extractContact, roleMatch, similarity, eligibleProfile, matchesCastingRequirements, isExplicitAdultCasting,matchesWantedProfileRoles,incompleteProfileFields} from "./engine.ts";
 const db=new SQL(Bun.env.DATABASE_URL||"postgres://unconfigured");
@@ -110,6 +111,7 @@ await sql("CREATE INDEX IF NOT EXISTS mm_support_message_ticket ON mm_support_me
 await setupFeedback(sql);
 await prepareEntitlements(sql);
 await prepareQuotaSettings(sql);
+await prepareDailyViews(sql);
 await prepareRelay(sql);
 await prepareAcceptedResponseOutbox(sql);
 await prepareAcceptedInvitationOutbox(sql);
@@ -251,20 +253,42 @@ async function matches(u,j,documentHashes=null){
  if(!payMatches(u.profile,j.body))return false;
  return true;
 }
+async function showJobWithDailyLimit(u,j,back=null){
+ const view=await claimDailyView(db,{userId:u.id,kind:"job",itemId:j.id,paid:hasPaidAccess(u)});
+ if(!view.allowed)return send(u.id,dailyLimitText("job",view.limit||0),buttons([[["📢 К списку заявок",back||"jobs"],["🏠 В меню","home"]]]));
+ return card(u.id,j,back);
+}
+async function showProfileWithDailyLimit(u,person,heading="Анкета",back=null){
+ const view=await claimDailyView(db,{userId:u.id,kind:"profile",itemId:person.id,paid:hasPaidAccess(u)});
+ if(!view.allowed)return send(u.id,dailyLimitText("profile",view.limit||0),buttons([[["🔎 К каталогу",back||"browse:0"],["🏠 В меню","home"]]]));
+ return profile(u.id,person,heading,back);
+}
 async function deliverTo(u,j){
  if(!(await matches(u,j)))return false;
  const prev=await sql("SELECT j.body FROM mm_deliveries d JOIN mm_jobs j ON d.job_id=j.id WHERE d.user_id=$1 AND d.created_at>NOW()-INTERVAL '7 days' ORDER BY d.created_at DESC LIMIT 100",u.id);
  if(prev.some(p=>similarity(get(p.body,"описание"),get(j.body,"описание"))>=.95))return false;
+ const existing=await sql("SELECT 1 FROM mm_deliveries WHERE user_id=$1 AND job_id=$2",u.id,j.id);
+ if(existing.length)return false;
+ const view=await claimDailyView(db,{userId:u.id,kind:"job",itemId:j.id,paid:hasPaidAccess(u)});
+ if(!view.allowed)return false;
  const inserted=await sql("INSERT INTO mm_deliveries(user_id,job_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING job_id",u.id,j.id);
- if(!inserted.length)return false;
- try {
- const sent=await card(u.id,j);
- if(!sent?.ok){await sql("DELETE FROM mm_deliveries WHERE user_id=$1 AND job_id=$2",u.id,j.id);return false}
- await safetyOnce(u);return true;
-} catch(e){
- await sql("DELETE FROM mm_deliveries WHERE user_id=$1 AND job_id=$2",u.id,j.id);
- throw e;
-}
+ if(!inserted.length){
+  if(!view.already&&!view.paid)await releaseUnsentDailyView(sql,{userId:u.id,kind:"job",itemId:j.id,day:view.day});
+  return false;
+ }
+ try{
+  const sent=await card(u.id,j);
+  if(!sent?.ok){
+   await sql("DELETE FROM mm_deliveries WHERE user_id=$1 AND job_id=$2",u.id,j.id);
+   if(!view.already&&!view.paid)await releaseUnsentDailyView(sql,{userId:u.id,kind:"job",itemId:j.id,day:view.day});
+   return false;
+  }
+  await safetyOnce(u);return true;
+ }catch(error){
+  await sql("DELETE FROM mm_deliveries WHERE user_id=$1 AND job_id=$2",u.id,j.id);
+  if(!view.already&&!view.paid)await releaseUnsentDailyView(sql,{userId:u.id,kind:"job",itemId:j.id,day:view.day});
+  throw error;
+ }
 }
 async function safetyOnce(u){
  const eligible=await sql("SELECT id FROM mm_users WHERE id=$1 AND first_safety_sent_at IS NULL",u.id);
@@ -321,13 +345,15 @@ async function sendMatchedProfile(job,p){
  if(String(job.owner)===String(p.id)||Number(job.owner)===0||job.paused||job.status!=="active")return false;
  if(!p.active||p.blocked||p.suspended||!allConsentsCurrent(p.consent,await currentDocumentHashes())||!eligibleProfile(p.profile,p.photo))return false;
  if(!roleMatch(get(job.body,"кого ищу"),get(p.profile,"кто вы")))return false;
- const owner=(await sql("SELECT filters,consent FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE",job.owner))[0];
+ const owner=(await sql("SELECT filters,consent,access_until,trial_until FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE",job.owner))[0];
  if(!owner||!allConsentsCurrent(owner.consent,await currentDocumentHashes())||!matchesWantedProfileRoles(owner.filters?.profileRoles||[],get(p.profile,"кто вы")))return false;
  if(isExplicitAdultCasting([get(job.body,"описание"),get(job.body,"требования"),get(job.body,"тип работы")].join(" ")) && !(p.filters?.adult===true && ageAt(get(p.profile,"дата рождения"))>=18))return false;
  if(!matchesCastingRequirements(p.profile,job.body))return false;
  if(!payMatches(p.profile,job.body))return false;
  const city=get(job.body,"город").toLowerCase();
  if(city&&get(p.profile,"город")&&!get(p.profile,"город").toLowerCase().split(",").some(x=>city.includes(x.trim())))return false;
+ const view=await claimDailyView(db,{userId:job.owner,kind:"profile",itemId:p.id,paid:hasPaidAccess(owner)});
+ if(!view.allowed)return false;
  return deliverMatchedProfileProgress(sql,job.id,p.id,
   ()=>send(job.owner,"Анкета по вашей заявке №"+job.id+" · "+esc(get(job.body,"название заявки"))),
   delivery=>profile(job.owner,p,"Анкета подходящего участника",null,delivery)
