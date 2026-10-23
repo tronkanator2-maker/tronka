@@ -588,9 +588,10 @@ async function submitResponse(u,body){
  if(!Number.isSafeInteger(jobId)||jobId<=0)return send(id,"Черновик отклика больше не найден. Найдите заявку заново.");
  if(!message||message.length>1200)return send(id,"Напишите текст отклика длиной от 1 до 1200 символов. Для отмены — /cancel.");
  if(!eligibleProfile(u.profile,u.photo))return send(id,"Перед откликом заполните анкету и добавьте главное фото.");
- const outcome=await createResponseWithQuota(db,{userId:id,jobId,message,paid:hasPaidAccess(u),weekStart:weekStartMoscow()});
+ const outcome=await createResponseWithQuota(db,{userId:id,jobId,message,paid:hasPaidAccess(u),weekStart:weekStartMoscow(),ownerUnlimited:testMode()});
  if(outcome.status==="invalid"||outcome.status==="unavailable")return send(id,"Заявка недоступна для отклика. Откройте актуальный список.");
- if(outcome.status==="limit")return send(id,"На этой неделе бесплатный отклик уже использован.");
+ if(outcome.status==="limit")return send(id,"На этой неделе лимит бесплатных откликов исчерпан.");
+ if(outcome.status==="job_full")return send(id,"По этой заявке достигнут предел откликов для бесплатного размещения. Найдите другую заявку.");
  if(outcome.status==="duplicate"){
   const f={...(u.filters||{})};delete f.replyJobId;
   await change(id,{state:"",filters:f});
