@@ -1524,6 +1524,7 @@ setInterval(()=>ensure().then(async()=>{
  await sql("DELETE FROM mm_updates WHERE created_at<NOW()-INTERVAL '30 days'");
  await sql("DELETE FROM mm_telegram_update_queue WHERE completed_at<NOW()-INTERVAL '30 days'");
  await sql("DELETE FROM mm_relay_usage WHERE hour_bucket<NOW()-INTERVAL '72 hours'");
+  await sql("DELETE FROM mm_daily_views WHERE day<(NOW() AT TIME ZONE 'Europe/Moscow')::date-30");
  await sql("DELETE FROM mm_fanout_queue WHERE pending=FALSE AND completed_at<NOW()-INTERVAL '90 days'");
  }).catch(e=>console.error("maintenance",String(e))),24*60*60*1000);
 setTimeout(()=>runFanoutBatch().catch(e=>console.error("fanout startup",String(e))),4000);
