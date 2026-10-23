@@ -50,7 +50,7 @@ footer{margin-top:30px}#login{max-width:500px;margin:10vh auto 0}#dashboard[hidd
 <button data-tab="jobs">Заявки</button><button data-tab="pending">Модерация</button>
 <button data-tab="reports">Обращения</button><button data-tab="sources">Источники</button>
 <button data-tab="candidates">Проверка источников</button><button data-tab="finance" class="owner-only">Финансы</button>
-<button data-tab="documents" class="owner-only">Документы</button><button data-tab="articles" class="owner-only">Статьи</button>
+<button data-tab="documents" class="owner-only">Документы</button><button data-tab="quotas" class="owner-only">Лимиты</button><button data-tab="articles" class="owner-only">Статьи</button>
 <button data-tab="audit" class="owner-only">Журнал действий</button><button data-tab="moderators" class="owner-only">Модераторы</button>
 </nav>
 <div class="panel" id="summaryPane"><div class="flex"><h2 class="grow">Состояние сервиса</h2><button id="refreshSummary">Обновить</button></div><div class="kpis" id="kpis"></div><p class="small" id="summaryNote"></p></div>
@@ -75,6 +75,10 @@ footer{margin-top:30px}#login{max-width:500px;margin:10vh auto 0}#dashboard[hidd
 <textarea name="body" rows="9" placeholder="Полный утверждённый текст" required></textarea>
 <button class="primary" type="submit">Опубликовать редакцию</button></form>
 <p><a href="/documents" target="_blank" rel="noopener noreferrer">Открыть публичные документы ↗</a></p><h2>История опубликованных редакций</h2><div id="documentHistory" class="table-wrap"></div></div>
+<div id="quotaPane" class="panel hide"><h2>Лимиты сервиса</h2>
+<p>Настройки действуют для новых действий пользователей без изменения кода. Лимит бесплатных заявок означает количество одновременно активных заявок, а не публикаций за календарную неделю. Изменения записываются в журнале администратора.</p>
+<div id="quotaRows" aria-live="polite"></div>
+</div>
 <div id="articlesPane" class="panel hide"><h2>Статьи и тексты справки</h2>
 <p>Здесь владелец может редактировать полезные статьи и помощь бота без изменения кода. Это <b>не</b> юридические документы и не согласия пользователей. Каждая редакция сохраняется с номером версии.</p>
 <form id="guideForm"><div class="form-grid">
@@ -238,6 +242,27 @@ async function loadDocuments(){
  }
  table.appendChild(body);root.appendChild(table);
 }
+async function loadQuotas(){
+ const data=await api("data?section=quotas");
+ const root=el("quotaRows");root.replaceChildren();
+ for(const setting of data.quotas||[]){
+  const form=document.createElement("form");form.className="flex";form.style.padding="8px 0";
+  const caption=document.createElement("label");caption.className="grow";caption.textContent=setting.title+" · "+setting.key;
+  const input=document.createElement("input");input.type="number";input.min=String(setting.min);input.max=String(setting.max);input.step="1";input.value=String(setting.value);input.required=true;
+  input.style.maxWidth="110px";input.setAttribute("aria-label",setting.title);
+  const save=document.createElement("button");save.type="submit";save.className="primary";save.textContent="Сохранить";
+  form.append(caption,input,save);
+  form.onsubmit=async event=>{
+   event.preventDefault();
+   save.disabled=true;
+   try{
+    const result=await api("action",{action:"quota_update",key:setting.key,value:input.value});
+    notice(result.message||"Лимит сохранён");await loadQuotas();
+   }catch(error){notice(error.message,true);save.disabled=false}
+  };
+  root.appendChild(form);
+ }
+}
 function selectGuideRecord(){
  const slug=el("guideSlug").value;
  const guide=state.guides.find(g=>g.slug===slug);
@@ -251,8 +276,8 @@ async function loadArticles(){
  selectGuideRecord();
 }
 async function selectTab(section){
- if(!["summary","finance","documents","articles"].includes(section)&&!sections[section])return;
- if(state.role!=="owner"&&["finance","documents","articles","audit","moderators"].includes(section))return;
+ if(!["summary","finance","documents","articles","quotas"].includes(section)&&!sections[section])return;
+ if(state.role!=="owner"&&["finance","documents","articles","quotas","audit","moderators"].includes(section))return;
  state.section=section;state.page=1;state.q="";
  el("search").value="";
  document.querySelectorAll("nav [data-tab]").forEach(b=>b.setAttribute("aria-current",b.dataset.tab===section?"page":"false"));
@@ -261,6 +286,7 @@ async function selectTab(section){
  el("financePane").classList.toggle("hide",section!=="finance");
  el("documentsPane").classList.toggle("hide",section!=="documents");
  el("articlesPane").classList.toggle("hide",section!=="articles");
+ el("quotaPane").classList.toggle("hide",section!=="quotas");
  el("sourceAdd").classList.toggle("hide",section!=="sources"||state.role!=="owner");
  el("moderatorAdd").classList.toggle("hide",section!=="moderators"||state.role!=="owner");
  if(sections[section]){
@@ -269,6 +295,7 @@ async function selectTab(section){
   await loadList();
  }else if(section==="finance")await loadFinance();
  else if(section==="documents")await loadDocuments();
+  else if(section==="quotas")await loadQuotas();
   else if(section==="articles")await loadArticles();
  else if(section==="summary")await loadSummary();
 }
