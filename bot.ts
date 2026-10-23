@@ -663,12 +663,12 @@ async function onMessage(m){
   await sql("INSERT INTO mm_referrals(inviter,invitee) SELECT id,$2 FROM mm_users WHERE id=$1 AND id<>$2 ON CONFLICT(invitee) DO NOTHING",referralStart.id,id);
  if(parseStartTarget(t)?.kind==="job"&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&(testMode()||u.phone)&&allConsentsCurrent(u.consent,await currentDocumentHashes())){
   const j=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",Number(payload.slice(4))))[0];
-  if(j){await card(id,j);return begin(u)}
+  if(j){await showJobWithDailyLimit(u,j);return begin(u)}
   await send(id,"Эта заявка больше не актуальна.");return begin(u);
  }
  if(parseStartTarget(t)?.kind==="profile"&&Bun.env.REGISTRATION_ENABLED==="true"&&await legalReady(sql)&&(testMode()||u.phone)&&allConsentsCurrent(u.consent,await currentDocumentHashes())){
   const target=(await sql("SELECT * FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE AND photo IS NOT NULL",Number(payload.slice(8))))[0];
-  if(target&&eligibleProfile(target.profile,target.photo)&&allConsentsCurrent(target.consent,await currentDocumentHashes())){await profile(id,target);return begin(u)}
+  if(target&&eligibleProfile(target.profile,target.photo)&&allConsentsCurrent(target.consent,await currentDocumentHashes())){await showProfileWithDailyLimit(u,target);return begin(u)}
   await send(id,"Эта анкета сейчас не участвует в поиске.");return begin(u);
  }
  return begin(u);
@@ -777,13 +777,13 @@ async function onCallback(c){
   if(deepTarget.kind==="job"){
    const job=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW()",deepTarget.id))[0];
    if(!job)return send(id,"Заявка больше не актуальна.",buttons([[["🔎 Найти другие заявки","jobs"],["🏠 В меню","home"]]]));
-   await card(id,job);
+   await showJobWithDailyLimit(u,job);
    return send(id,"Откройте другие разделы через главное меню.",buttons([[["📢 Другие заявки","jobs"],["🏠 В меню","home"]]]));
   }
   const target=(await sql("SELECT * FROM mm_users WHERE id=$1 AND active=TRUE AND blocked=FALSE AND suspended=FALSE AND photo IS NOT NULL",deepTarget.id))[0];
   if(!target||!publicProfileAllowed(target,await currentDocumentHashes(),allConsentsCurrent,eligibleProfile))
    return send(id,"Эта анкета сейчас недоступна.",buttons([[["🔎 Другие анкеты","browse:0"],["🏠 В меню","home"]]]));
-  await profile(id,target,"Анкета специалиста");
+  await showProfileWithDailyLimit(u,target,"Анкета специалиста");
   return send(id,"Продолжить поиск можно через каталог.",buttons([[["🔎 Каталог анкет","browse:0"],["🏠 В меню","home"]]]));
  }
 
@@ -1091,7 +1091,7 @@ if(a==="addphoto"){
   const job=(await sql("SELECT * FROM mm_jobs WHERE id=$1 AND status='active' AND paused=FALSE AND expires_at>NOW() AND created_at>NOW()-INTERVAL '14 days' AND owner<>$2",jobId,id))[0];
   const accessible=job&&(eligibleProfile(u.profile,u.photo)?await matches(u,job):!isExplicitAdultCasting([get(job.body,"описание"),get(job.body,"требования"),get(job.body,"тип работы")].join(" ")));
   if(!accessible)return send(id,"Эта заявка больше не подходит или уже закрыта.",buttons([[ ["📢 К списку заявок","jobs:"+offset],["🏠 В меню","home"] ]]));
-  return card(id,job,"jobs:"+offset);
+  return showJobWithDailyLimit(u,job,"jobs:"+offset);
  } if(a==="mine"||a.startsWith("mine:")){
   const offset=parsePageOffset(a,"mine");
   if(offset===null)return send(id,"Страница списка недоступна.",buttons([[["📌 Мои заявки","mine"],["🏠 В меню","home"]]]));
@@ -1167,7 +1167,7 @@ if(a.startsWith("jobpause:")){
   const target=(await sql("SELECT * FROM mm_users WHERE id=$1",targetId))[0];
   if(!publicProfileAllowed(target,await currentDocumentHashes(),allConsentsCurrent,eligibleProfile))
    return send(id,"Эта анкета сейчас недоступна.",buttons([[["🔎 К каталогу","browse:"+offset],["🏠 В меню","home"]]]));
-  return profile(id,target,"Анкета в каталоге","browse:"+offset);
+  return showProfileWithDailyLimit(u,target,"Анкета в каталоге","browse:"+offset);
  }
  if(a.startsWith("browse:"))return browseProfiles(u,Math.max(0,Math.min(297,Number(a.slice(7))||0)));
  if(a==="adult_toggle"){
