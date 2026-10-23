@@ -46,3 +46,16 @@ test("owner-only articles editor has real save and load handlers, without HTML i
  const script=adminHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1]||"";
  expect(()=>new Function(script)).not.toThrow();
 });
+
+test("owner quota editor renders input controls and real actions without HTML injection",()=>{
+ expect(adminHtml).toContain('data-tab="quotas" class="owner-only"');
+ expect(adminHtml).toContain('id="quotaPane"');
+ expect(adminHtml).toContain('id="quotaRows"');
+ expect(adminHtml).toContain('async function loadQuotas()');
+ expect(adminHtml).toContain('action:"quota_update"');
+ expect(adminHtml).toContain('input.type="number"');
+ expect(adminHtml).toContain('caption.textContent=setting.title');
+ expect(adminHtml).toContain('await loadQuotas()');
+ const code=adminHtml.match(/<script>([\s\S]*?)<\/script>/)?.[1]||"";
+ expect(()=>new Function(code)).not.toThrow();
+});
