@@ -33,9 +33,12 @@ export async function startPhoneTrial(sql,id,phone,pepper){
  const fp=await fingerprint(normalized,pepper);
  // One SQL statement guarantees the phone claim and trial grant are atomic.
  // A failed grant never consumes the user's one-time trial.
- const updated=await sql(`WITH claimed AS (
+ const updated=await sql(`WITH eligible AS (
+   SELECT id FROM mm_users WHERE id=$2 AND trial_until IS NULL FOR UPDATE
+ ), claimed AS (
    INSERT INTO mm_trial_ledger(fingerprint,first_user)
-   VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING first_user
+   SELECT $1,id FROM eligible
+   ON CONFLICT DO NOTHING RETURNING first_user
  ), granted AS (
    UPDATE mm_users SET trial_until=NOW()+INTERVAL '15 days'
    WHERE id=$2 AND trial_until IS NULL AND EXISTS(SELECT 1 FROM claimed)
