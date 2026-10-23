@@ -12,6 +12,7 @@ test("admin routes enforce login, moderator restrictions and valid action result
   if(query.includes("COUNT(*) FILTER"))return [{manually_enabled:3,trial_active:2,overlap:1}];
   if(query.includes("UPDATE mm_reports_v2"))return [{id:42}];
   if(query.includes("INSERT INTO mm_guide_revisions"))return [{slug:"portfolio",version:1,title:"Портфолио",created_at:"2026-10-22"}];
+  if(query.includes("INSERT INTO mm_quota_settings"))return [{key:args[0],value:args[1],updated_at:"2026-10-22"}];
   return [];
  };
  const req=(path,method="GET",data=null,cookie="")=>new Request("https://panel.example"+path,{
@@ -27,6 +28,15 @@ test("admin routes enforce login, moderator restrictions and valid action result
   expect(own.status).toBe(200);
   expect((await own.json()).role).toBe("owner");
   const ownerCookie=own.headers.get("set-cookie").split(";")[0];
+  const quotaView=await adminApp(req("/admin/data?section=quotas","GET",null,ownerCookie),sql);
+  expect(quotaView.status).toBe(200);
+  expect((await quotaView.json()).quotas).toHaveLength(7);
+  const changedQuota=await adminApp(req("/admin/action","POST",{action:"quota_update",key:"free_daily_jobs",value:7},ownerCookie),sql);
+  expect(changedQuota.status).toBe(200);
+  expect((await changedQuota.json()).setting.value).toBe(7);
+  expect(calls.some(c=>c.query.includes("'quota_update'"))).toBe(true);
+  const invalidQuota=await adminApp(req("/admin/action","POST",{action:"quota_update",key:"__proto__",value:7},ownerCookie),sql);
+  expect(invalidQuota.status).toBe(400);
   const articles=await adminApp(req("/admin/data?section=articles","GET",null,ownerCookie),sql);
   expect(articles.status).toBe(200);
   const articleData=await articles.json();
@@ -48,6 +58,8 @@ test("admin routes enforce login, moderator restrictions and valid action result
   expect((await mod.json()).role).toBe("moderator");
   const moderatorCookie=mod.headers.get("set-cookie").split(";")[0];
   expect((await adminApp(req("/admin/data?section=articles","GET",null,moderatorCookie),sql)).status).toBe(403);
+  expect((await adminApp(req("/admin/data?section=quotas","GET",null,moderatorCookie),sql)).status).toBe(403);
+  expect((await adminApp(req("/admin/action","POST",{action:"quota_update",key:"free_responses_week",value:99},moderatorCookie),sql)).status).toBe(403);
   expect((await adminApp(req("/admin/action","POST",{
    action:"guide_publish",slug:"portfolio",title:"Тест",
    body:"Попытка модератора изменить справочные материалы."
