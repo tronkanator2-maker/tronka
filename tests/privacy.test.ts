@@ -79,3 +79,23 @@ test("removes orphan decision notices both to and about deleted participant",asy
  expect(decision.q).toContain("from_user=$1 OR to_user=$1");
  expect(statements.at(-1).q).toBe("DELETE FROM mm_users WHERE id=$1");
 });
+
+test("view history must be included in account export and erased upon deletion",async()=>{
+ const reads=[];
+ const sql=async(query,...args)=>{
+  reads.push({query,args});
+  if(query==="SELECT * FROM mm_users WHERE id=$1")return [{id:991,first_name:"Test"}];
+  if(query.includes("SELECT kind,item_id,day,created_at FROM mm_daily_views"))return [{kind:"job",item_id:5,day:"2026-10-23",created_at:"2026-10-23T01:00:00Z"}];
+  return [];
+ };
+ const archive=JSON.parse(await exportAccount(sql,991));
+ expect(archive.dailyViews).toHaveLength(1);
+ expect(archive.dailyViews[0].kind).toBe("job");
+ expect(reads.some(x=>x.query.includes("FROM mm_daily_views WHERE user_id=$1"))).toBe(true);
+ const removal=[];
+ await deleteAccount(async(query,...args)=>{removal.push({query,args});return []},991);
+ expect(removal.some(x=>x.query==="DELETE FROM mm_daily_views WHERE user_id=$1")).toBe(true);
+ expect(removal.findIndex(x=>x.query==="DELETE FROM mm_daily_views WHERE user_id=$1"))
+  .toBeLessThan(removal.findIndex(x=>x.query==="DELETE FROM mm_users WHERE id=$1"));
+ expect(removal.every(x=>x.args[0]===991)).toBe(true);
+});
