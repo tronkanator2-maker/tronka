@@ -4,6 +4,7 @@ import {adminHtml} from "./admin-ui.ts";
 import {listGuideEditors,publishGuideRevision} from "./guide-editor.ts";
 import {readQuotaSettings,updateQuotaSetting} from "./quota-settings.ts";
 import {prepareModerators,createModerator,authenticateModerator,updateModeratorStatus} from "./admin-moderators.ts";
+import {verifyAdminTotp} from "./admin-totp.ts";
 import {ADMIN_SECTIONS,readAdminList,readFinanceSummary,canAdminAct} from "./admin-data.ts";
 // Minimal secured operational dashboard. Disabled until ADMIN_PASSWORD is configured.
 // Session tokens are only kept in memory; no user data is exposed to unauthenticated requests.
@@ -43,15 +44,17 @@ export async function adminApp(req,sql,onApprove=null,onTicketReply=null){
   // Legacy shared moderator password is supported, but new moderators have distinct accounts.
   const moderator=!owner && (!!namedModerator || (!!Bun.env.ADMIN_MODERATOR_PASSWORD && Bun.env.ADMIN_MODERATOR_PASSWORD.length>=16 &&
     !equal(Bun.env.ADMIN_MODERATOR_PASSWORD,Bun.env.ADMIN_PASSWORD) && equal(body?.password,Bun.env.ADMIN_MODERATOR_PASSWORD)));
-  if(!owner&&!moderator){
+  const configuredTotp=String(Bun.env.ADMIN_TOTP_SECRET||"").trim();
+  const ownerAuthorized=owner&&(!configuredTotp||await verifyAdminTotp(configuredTotp,body?.totp));
+  if(!ownerAuthorized&&!moderator){
    previous.n++;previous.until=Date.now()+(previous.n>=5?300000:1500);
    attempts.set(address,previous);return json({error:"Неверные данные."},401);
   }
   attempts.delete(address);
   const bytes=crypto.getRandomValues(new Uint8Array(32));
   const id=Array.from(bytes).map(x=>x.toString(16).padStart(2,"0")).join("");
-  sessions.set(id,{expires:Date.now()+12*3600e3,role:owner?"owner":"moderator",principalId:namedModerator?.id||null,principalName:owner?"owner":namedModerator?.username||"legacy-moderator"});
-  return json({ok:true,role:owner?"owner":"moderator"},200,{"set-cookie":"mm_admin="+id+"; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=43200"});
+  sessions.set(id,{expires:Date.now()+12*3600e3,role:ownerAuthorized?"owner":"moderator",principalId:namedModerator?.id||null,principalName:ownerAuthorized?"owner":namedModerator?.username||"legacy-moderator"});
+  return json({ok:true,role:ownerAuthorized?"owner":"moderator"},200,{"set-cookie":"mm_admin="+id+"; Path=/admin; HttpOnly; Secure; SameSite=Strict; Max-Age=43200"});
  }
  const session=sessionFrom(req);
  if(!session)return json({error:"Требуется вход."},401);
