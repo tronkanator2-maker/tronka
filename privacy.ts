@@ -3,7 +3,7 @@ const toNumber=n=>typeof n==="bigint"?n.toString():n;
 export async function exportAccount(sql,id){
  const [user]=await sql("SELECT * FROM mm_users WHERE id=$1",id);
  if(!user)return null;
- const [jobs,responses,invitations,reviews,tickets,consents,recovery,dailyViews]=await Promise.all([
+ const [jobs,responses,invitations,reviews,tickets,consents,recovery,dailyViews,trialReminders]=await Promise.all([
   sql("SELECT id,body,status,created_at,expires_at FROM mm_jobs WHERE owner=$1 ORDER BY id",id),
   sql("SELECT id,job_id,status,message,created_at FROM mm_responses WHERE user_id=$1 ORDER BY id",id),
   sql("SELECT id,from_user,to_user,status,created_at FROM mm_invitations WHERE from_user=$1 OR to_user=$1 ORDER BY id",id),
@@ -11,13 +11,14 @@ export async function exportAccount(sql,id){
   sql("SELECT id,reporter,target_user,target_job,kind,status,body,created_at FROM mm_reports_v2 WHERE reporter=$1 ORDER BY id",id),
   sql("SELECT consent,checked,document_versions,document_hashes,recorded_at FROM mm_consent_events WHERE telegram_user=$1 ORDER BY id",id),
   sql("SELECT field,value,saved_at FROM mm_user_recovery WHERE user_id=$1 ORDER BY field",id),
-  sql("SELECT kind,item_id,day,created_at FROM mm_daily_views WHERE user_id=$1 ORDER BY day,kind,item_id",id)
+  sql("SELECT kind,item_id,day,created_at FROM mm_daily_views WHERE user_id=$1 ORDER BY day,kind,item_id",id),
+  sql("SELECT days_before,sent_at,completed_at FROM mm_trial_reminders WHERE user_id=$1 ORDER BY days_before DESC",id)
  ]);
  const data={
   exported_at:new Date().toISOString(),
   service:"Мир моделей",
   note:"This archive contains only information held by Мир моделей. Telegram chats with other people remain outside this archive.",
-  account:user,jobs,responses,invitations,reviews,tickets,consents,recovery,dailyViews
+  account:user,jobs,responses,invitations,reviews,tickets,consents,recovery,dailyViews,trialReminders
  };
  return JSON.stringify(data,(_,v)=>toNumber(v),2);
 }
@@ -37,6 +38,7 @@ export async function deleteAccount(sql,id){
  await sql("DELETE FROM mm_reports WHERE user_id=$1",id);
  await sql("DELETE FROM mm_user_recovery WHERE user_id=$1",id);
  await sql("DELETE FROM mm_daily_views WHERE user_id=$1",id);
+ await sql("DELETE FROM mm_trial_reminders WHERE user_id=$1",id);
  // Decision outbox has no FK because it stores several entity kinds.
  // Remove both notices addressed to the user and those referencing the user's
  // responses/invitations before deleting the source rows.
