@@ -32,6 +32,7 @@ import {exportAccount,deleteAccount,sendAccountExport} from "./privacy.ts";
 import {parseWithModel} from "./ai-parser.ts";
 import {prepareDocuments,legalReady as legalDocumentsReady,recordConsent,publicDocumentRoute,latestDocuments,documentHashes,allConsentsCurrent as fullConsentsCurrent,consentIsCurrent} from "./documents.ts";
 import {prepareEntitlements,startPhoneTrial,hasPaidAccess as activeSubscription,weekStartMoscow} from "./access.ts";
+import {prepareTrialReminders,trialRemindersEnabled,muteTrialReminders,queueDueTrialReminders,deliverTrialReminders} from "./trial-reminders.ts";
 import {createResponseWithQuota,createInvitationWithQuota,publishJobWithQuota,changeJobVisibilityWithQuota} from "./quota-actions.ts";
 import {prepareQuotaSettings} from "./quota-settings.ts";
 import {prepareDailyViews,claimDailyView,releaseUnsentDailyView,dailyLimitText} from "./daily-views.ts";
@@ -110,6 +111,7 @@ await sql("CREATE INDEX IF NOT EXISTS mm_support_message_ticket ON mm_support_me
 
 await setupFeedback(sql);
 await prepareEntitlements(sql);
+await prepareTrialReminders(sql);
 await prepareQuotaSettings(sql);
 await prepareDailyViews(sql);
 await prepareRelay(sql);
@@ -468,6 +470,17 @@ async function demoScreen(id,screen="home"){
  return send(id,"📚 <b>Примеры анкет и заявок</b>\n\nЗдесь собраны 10 вымышленных анкет и 10 примеров заявок, а также показано, как работают поиск, отклики и приглашения. Примеры не публикуются в общем каталоге, а реальные уведомления никому не отправляются.",demoMenu());
 }
 
+let trialReminderWorkerRunning=false;
+async function processTrialReminders(){
+ if(!trialRemindersEnabled(Bun.env)||trialReminderWorkerRunning)return;
+ trialReminderWorkerRunning=true;
+ try{
+  await ensure();
+  await queueDueTrialReminders(sql);
+  await deliverTrialReminders(sql,send);
+ }finally{trialReminderWorkerRunning=false}
+}
+
 let profileRefreshWorkerRunning=false;
 async function processProfileRefresh(){
  if(profileRefreshWorkerRunning)return;
@@ -793,7 +806,11 @@ async function onCallback(c){
   await sql("UPDATE mm_jobs SET paused=TRUE WHERE owner=$1 AND status='active'",id);
   return send(id,"Анкета скрыта из каталога, активные заявки остановлены. Данные можно удалить через /deleteaccount. Возобновить поиск можно в главном меню.",buttons([[["🏠 В меню","home"]]]));
  }
- if(a==="privacy")return send(id,"🔐 <b>Данные и приватность</b>\nЭкспорт показывает сведения, сохранённые сервисом. Удаление аккаунта безвозвратное; ранее отправленные Telegram-сообщения других людей останутся.",buttons([[["📦 Экспорт данных","privacy:export"]],[["🗑 Удалить аккаунт","privacy:delete"]],...(testMode()?[[["Скрыть анкету и остановить заявки","test:revoke"]]]:[]),[["◀️ В меню","home"]]]));
+ if(a==="trial:mute"){
+   const muted=await muteTrialReminders(sql,id);
+   return send(id,muted?"🔕 Напоминания о завершении пробного периода отключены. Срок самого доступа не изменился.":"Настройку не удалось изменить. Откройте меню заново.");
+  }
+  if(a==="privacy")return send(id,"🔐 <b>Данные и приватность</b>\nЭкспорт показывает сведения, сохранённые сервисом. Удаление аккаунта безвозвратное; ранее отправленные Telegram-сообщения других людей останутся.",buttons([[["📦 Экспорт данных","privacy:export"]],[["🗑 Удалить аккаунт","privacy:delete"]],...(testMode()?[[["Скрыть анкету и остановить заявки","test:revoke"]]]:[]),[["◀️ В меню","home"]]]));
  if(a==="privacy:export"){const payload=await exportAccount(sql,id);if(!payload)return send(id,"Сведения ещё не сохранены.");const sent=await sendAccountExport(token,id,payload);if(!sent)return send(id,"Ошибка отправки файла.");return;}
  if(a==="privacy:delete"){await change(id,{state:"delete_confirm"});return send(id,"<b>Подтвердите окончательное удаление</b>\nАнкета, фото и объявления будут удалены из базы. Уже отправленные сообщения в чужих Telegram-чатах сохранятся.",buttons([[["Да, удалить всё","deleteaccount:confirm"]],[["Отменить","deleteaccount:cancel"]]]));}
  if(a==="deleteaccount:cancel"){await change(id,{state:""});return send(id,"Удаление отменено.",menu);}
@@ -1512,6 +1529,7 @@ Bun.serve({port:Number(Bun.env.PORT||3000),hostname:"0.0.0.0",async fetch(r){
 setInterval(()=>ensure().then(()=>feedbackTick(sql,send)).catch(e=>console.error("feedback job",String(e))),60*60*1000);
 setInterval(()=>runFanoutBatch().catch(e=>console.error("fanout tick",String(e))),5000);
 setInterval(()=>processResponseOutbox().catch(e=>console.error("response outbox tick",String(e))),5000);
+setInterval(()=>processTrialReminders().catch(e=>console.error("trial reminder tick",String(e))),15*60*1000);
 setInterval(()=>processAcceptedResponseOutbox().catch(e=>console.error("accepted response outbox tick",String(e))),5000);
 setInterval(()=>processDecisionNotifications().catch(e=>console.error("decision notice tick",String(e))),5000);
 setInterval(()=>processAcceptedInvitationOutbox().catch(e=>console.error("accepted invitation outbox tick",String(e))),5000);
@@ -1532,6 +1550,7 @@ setTimeout(()=>processAcceptedResponseOutbox().catch(e=>console.error("accepted 
 setTimeout(()=>processDecisionNotifications().catch(e=>console.error("decision notice startup",String(e))),7100);
 setTimeout(()=>processAcceptedInvitationOutbox().catch(e=>console.error("accepted invitation startup",String(e))),7500);
 setTimeout(()=>processInvitationOutbox().catch(e=>console.error("initial invitation startup",String(e))),8000);
+setTimeout(()=>processTrialReminders().catch(e=>console.error("trial reminder startup",String(e))),12500);
 setTimeout(()=>processProfileRefresh().catch(e=>console.error("profile refresh startup",String(e))),8500);
 setTimeout(()=>processTelegramUpdateQueue().catch(e=>console.error("telegram update startup",String(e))),1500);
 if(token&&secret&&Bun.env.PUBLIC_URL)(async()=>{
