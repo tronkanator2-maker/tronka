@@ -13,7 +13,7 @@ test("admin login remains available with password while owner has not enabled 2F
   expect(await page.text()).toContain("Код 2FA");
   const response=await adminApp(new Request("http://internal:3000/admin/login",{
    method:"POST",
-   headers:{"content-type":"application/json"},
+   headers:{"content-type":"application/json","x-forwarded-for":"192.0.2.85"},
    body:JSON.stringify({password:"test-admin-password"})
   }),async()=>[]);
   expect(response.status).toBe(200);
