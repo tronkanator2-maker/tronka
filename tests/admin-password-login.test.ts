@@ -1,14 +1,16 @@
 import {test,expect} from "bun:test";
 import {adminApp} from "../admin.ts";
 
-test("admin login uses the configured password without requiring a 2FA code",async()=>{
+test("admin login remains available with password while owner has not enabled 2FA",async()=>{
  const previous=Bun.env.ADMIN_PASSWORD;
  const previousUrl=Bun.env.PUBLIC_URL;
+ const previousOtp=Bun.env.ADMIN_TOTP_SECRET;
+ delete Bun.env.ADMIN_TOTP_SECRET;
  Bun.env.ADMIN_PASSWORD="test-admin-password";
  Bun.env.PUBLIC_URL="https://public.example.test";
  try{
   const page=await adminApp(new Request("http://internal:3000/admin"),async()=>[]);
-  expect(await page.text()).not.toContain("Код 2FA");
+  expect(await page.text()).toContain("Код 2FA");
   const response=await adminApp(new Request("http://internal:3000/admin/login",{
    method:"POST",
    headers:{"content-type":"application/json"},
@@ -26,6 +28,8 @@ test("admin login uses the configured password without requiring a 2FA code",asy
  }finally{
   if(previous===undefined)delete Bun.env.ADMIN_PASSWORD;
   else Bun.env.ADMIN_PASSWORD=previous;
+  if(previousOtp===undefined)delete Bun.env.ADMIN_TOTP_SECRET;
+  else Bun.env.ADMIN_TOTP_SECRET=previousOtp;
   if(previousUrl===undefined)delete Bun.env.PUBLIC_URL;
   else Bun.env.PUBLIC_URL=previousUrl;
  }
