@@ -11,6 +11,7 @@ import {prepareInvitationOutbox} from "../invitation-delivery.ts";
 import {prepareQuotaSettings,updateQuotaSetting,readQuotaSettings} from "../quota-settings.ts";
 import {prepareDailyViews,claimDailyView} from "../daily-views.ts";
 import {prepareEntitlements,startPhoneTrial} from "../access.ts";
+import {prepareTrialReminders,queueDueTrialReminders,deliverTrialReminders,muteTrialReminders} from "../trial-reminders.ts";
 
 // This suite runs ONLY against the disposable PostgreSQL 16 service in CI.
 // It must never use DATABASE_URL or connect to Railway/production.
@@ -21,7 +22,7 @@ const sql=(query,...args)=>client.unsafe(query,args);
 
 test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay",async()=>{
  try{
-  await sql("CREATE TABLE mm_users(id BIGINT PRIMARY KEY,active BOOLEAN NOT NULL DEFAULT TRUE,blocked BOOLEAN NOT NULL DEFAULT FALSE,suspended BOOLEAN NOT NULL DEFAULT FALSE,trial_until TIMESTAMPTZ,access_until TIMESTAMPTZ)");
+  await sql("CREATE TABLE mm_users(id BIGINT PRIMARY KEY,active BOOLEAN NOT NULL DEFAULT TRUE,blocked BOOLEAN NOT NULL DEFAULT FALSE,suspended BOOLEAN NOT NULL DEFAULT FALSE,consent JSONB NOT NULL DEFAULT '{}'::jsonb,trial_until TIMESTAMPTZ,access_until TIMESTAMPTZ)");
   await sql("CREATE TABLE mm_jobs(id BIGSERIAL PRIMARY KEY,owner BIGINT NOT NULL,status TEXT NOT NULL DEFAULT 'active',paused BOOLEAN NOT NULL DEFAULT FALSE,expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW()+INTERVAL '7 days',body JSONB NOT NULL DEFAULT '{}'::jsonb,contact TEXT,draft_token TEXT,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),UNIQUE(owner,draft_token))");
   await sql("CREATE TABLE mm_fanout_queue(job_id BIGINT PRIMARY KEY,pending BOOLEAN NOT NULL DEFAULT TRUE,cursor_id BIGINT NOT NULL DEFAULT 0,profile_cursor_id BIGINT NOT NULL DEFAULT 0,generation BIGINT NOT NULL DEFAULT 1,profiles_done BOOLEAN NOT NULL DEFAULT FALSE,attempts INTEGER NOT NULL DEFAULT 0,completed_at TIMESTAMPTZ,next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
   await sql("CREATE TABLE mm_profile_refresh_queue(user_id BIGINT PRIMARY KEY,phase TEXT NOT NULL DEFAULT 'matches',cursor_job_id BIGINT NOT NULL DEFAULT 0,generation BIGINT NOT NULL DEFAULT 1,attempts INTEGER NOT NULL DEFAULT 0,next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),completed_at TIMESTAMPTZ,pending BOOLEAN NOT NULL DEFAULT TRUE)");
@@ -32,9 +33,26 @@ test("real PostgreSQL: idempotent visibility, permissioned acceptance and relay"
   await prepareQuotaSettings(sql);
   await prepareDailyViews(sql);
   await prepareEntitlements(sql);
+  await prepareTrialReminders(sql);
   await prepareAcceptedResponseOutbox(sql);
   await prepareAcceptedInvitationOutbox(sql);
   await prepareDecisionNotifications(sql);
+
+  await sql("INSERT INTO mm_users(id,trial_until) VALUES (9701,NOW()+INTERVAL '2 days'),(9702,NOW()+INTERVAL '12 hours'),(9703,NOW()+INTERVAL '11 hours'),(9704,NOW()+INTERVAL '10 hours')");
+  await muteTrialReminders(sql,9703);
+  await sql("UPDATE mm_users SET access_until=NOW()+INTERVAL '90 days' WHERE id=9704");
+  expect(await queueDueTrialReminders(sql)).toBe(2);
+  expect((await sql("SELECT COUNT(*)::int AS n FROM mm_trial_reminders"))[0].n).toBe(2);
+  const sent=[];
+  const reminderResult=await deliverTrialReminders(sql,async (id,msg,keyboard)=>{
+   sent.push({id:String(id),msg,keyboard});return {ok:true}
+  });
+  expect(reminderResult).toEqual({processed:2,delivered:2,skipped:0,failed:0});
+  expect(sent.map(x=>x.id).sort()).toEqual(["9701","9702"]);
+  expect(sent.find(x=>x.id==="9701").keyboard.inline_keyboard[1][0].callback_data).toBe("trial:mute");
+  expect((await sql("SELECT COUNT(*)::int AS n FROM mm_trial_reminders WHERE sent_at IS NULL"))[0].n).toBe(0);
+  expect(await queueDueTrialReminders(sql)).toBe(0);
+  expect((await deliverTrialReminders(sql,async()=>{throw Error("No duplicates")})).processed).toBe(0);
 
   await sql("INSERT INTO mm_users(id) VALUES(101),(102),(103)");
   // Trial numbers may only be consumed by eligible existing accounts.
