@@ -504,7 +504,7 @@ async function processResponseOutbox(){
    try{
     const owner=(await sql("SELECT * FROM mm_users WHERE id=$1",outbox.owner))[0];
     const applicant=(await sql("SELECT * FROM mm_users WHERE id=$1",outbox.user_id))[0];
-    if(!owner||!applicant||owner.blocked||owner.suspended||!owner.active||outbox.response_status!=="pending"||outbox.job_status!=="active"||outbox.paused){
+    if(!owner||!applicant||owner.blocked||owner.suspended||!owner.active||applicant.blocked||applicant.suspended||!applicant.active||outbox.response_status!=="pending"||outbox.job_status!=="active"||outbox.paused){
      await sql("UPDATE mm_response_outbox SET completed_at=NOW() WHERE response_id=$1",outbox.response_id);
      continue;
     }
