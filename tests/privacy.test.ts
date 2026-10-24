@@ -99,3 +99,19 @@ test("view history must be included in account export and erased upon deletion",
   .toBeLessThan(removal.findIndex(x=>x.query==="DELETE FROM mm_users WHERE id=$1"));
  expect(removal.every(x=>x.args[0]===991)).toBe(true);
 });
+
+test("trial reminder outbox is part of the export and deleted with a user account",async()=>{
+ const sql=async(q,...args)=>{
+  if(q==="SELECT * FROM mm_users WHERE id=$1")return [{id:400,profile:{},filters:{}}];
+  if(q.includes("SELECT days_before,sent_at,completed_at FROM mm_trial_reminders"))return [{days_before:3,sent_at:"2026-10-24T10:00:00Z",completed_at:"2026-10-24T10:00:00Z"}];
+  return [];
+ };
+ const archive=JSON.parse(await exportAccount(sql,400));
+ expect(archive.trialReminders).toHaveLength(1);
+ expect(archive.trialReminders[0].days_before).toBe(3);
+ const deleted=[];
+ await deleteAccount(async(q,...args)=>{deleted.push(q);return []},400);
+ expect(deleted).toContain("DELETE FROM mm_trial_reminders WHERE user_id=$1");
+ expect(deleted.indexOf("DELETE FROM mm_trial_reminders WHERE user_id=$1"))
+  .toBeLessThan(deleted.indexOf("DELETE FROM mm_users WHERE id=$1"));
+});
