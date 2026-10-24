@@ -43,7 +43,7 @@ footer{margin-top:30px}#login{max-width:500px;margin:10vh auto 0}#dashboard[hidd
 </style></head><body><main>
 <header><h1>🎬 Мир моделей</h1><div class="flex"><span id="role" class="small"></span><button id="logout" hidden>Выйти</button></div></header>
 <div id="notice" role="status" aria-live="polite"></div>
-<section id="login" class="panel"><h2>Вход в панель</h2><form id="loginForm"><p class="small">Владелец входит по паролю; модератор указывает также свой логин.</p><div class="flex"><input name="username" autocomplete="username" placeholder="Логин модератора (если есть)"><input name="password" type="password" autocomplete="current-password" placeholder="Пароль" required><button class="primary" type="submit">Войти</button></div></form></section>
+<section id="login" class="panel"><h2>Вход в панель</h2><form id="loginForm"><p class="small">Владелец входит по паролю; модератор указывает также свой логин.</p><div class="flex"><input name="username" autocomplete="username" placeholder="Логин модератора (если есть)"><input name="password" type="password" autocomplete="current-password" placeholder="Пароль" required><input name="totp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="Код 2FA (если включён)" aria-label="Код 2FA для владельца"><button class="primary" type="submit">Войти</button></div></form></section>
 <section id="dashboard" hidden>
 <nav id="tabs" aria-label="Разделы панели">
 <button data-tab="summary">Обзор</button><button data-tab="users">Пользователи</button>
@@ -305,7 +305,7 @@ async function boot(){
 }
 el("loginForm").onsubmit=async event=>{
  event.preventDefault();const form=new FormData(event.target);
- try{const data=await api("login",{username:form.get("username"),password:form.get("password")});event.target.reset();state.role=data.role;await boot();notice("Вход выполнен. Доступ: "+(data.role==="owner"?"владелец":"модератор"))}
+ try{const data=await api("login",{username:form.get("username"),password:form.get("password"),totp:form.get("totp")});event.target.reset();state.role=data.role;await boot();notice("Вход выполнен. Доступ: "+(data.role==="owner"?"владелец":"модератор"))}
  catch(error){notice(error.message,true)}
 };
 el("logout").onclick=async()=>{try{await api("logout",{});setAuthenticated(false);notice("Вы вышли из панели.")}catch(e){notice(e.message,true)}};
