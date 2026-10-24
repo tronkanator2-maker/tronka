@@ -24,8 +24,9 @@ test("correct password alone no longer authenticates owner once secret is config
  const pass="owner-otp-test-password-very-long",secret=rfcSecret;
  Bun.env.ADMIN_PASSWORD=pass;Bun.env.ADMIN_TOTP_SECRET=secret;
  const endpoint="https://otp-panel.example/admin/login";
+ let attempt=0;
  const request=(password,totp)=>new Request(endpoint,{
-  method:"POST",headers:{"content-type":"application/json"},
+  method:"POST",headers:{"content-type":"application/json","x-forwarded-for":"192.0.2."+(++attempt)},
   body:JSON.stringify({password,totp})
  });
  const sql=async()=>[];
