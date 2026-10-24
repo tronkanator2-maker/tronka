@@ -16,7 +16,7 @@ test("admin routes enforce login, moderator restrictions and valid action result
   return [];
  };
  const req=(path,method="GET",data=null,cookie="")=>new Request("https://panel.example"+path,{
-  method,headers:{"content-type":"application/json",...(method==="POST"?{origin:"https://panel.example"}:{}),...(cookie?{cookie}:{})},
+  method,headers:{"content-type":"application/json","x-forwarded-for":"192.0.2.84",...(method==="POST"?{origin:"https://panel.example"}:{}),...(cookie?{cookie}:{})},
   body:method==="POST"?JSON.stringify(data):undefined
  });
  try{
